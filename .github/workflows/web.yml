@@ -79,7 +79,8 @@ jobs:
         with:
           node-version: 22
       - run: npm install
-      - run: npx playwright install --with-deps chromium
+      # Runner apt mirrors flake; refresh the index and retry once.
+      - run: sudo apt-get update && (npx playwright install --with-deps chromium || (sleep 30 && sudo apt-get update && npx playwright install --with-deps chromium))
       - name: Smoke test the built app
         run: npx playwright test
       - uses: actions/upload-artifact@v4

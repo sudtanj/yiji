@@ -50,7 +50,7 @@ function Items({ items, onDone }: { items: MenuItem[]; onDone: () => void }) {
   );
 }
 
-export function App({ vault }: { vault: Vault<ConnConfig> }) {
+export function App({ vault }: { vault: Vault<ConnConfig> | null }) {
   const [conns, setConns] = useState<ConnConfig[]>([]);
   const [sessions, setSessions] = useState<Record<string, Session>>({});
   const [tabs, setTabs] = useState<Tab[]>([]);
@@ -69,6 +69,7 @@ export function App({ vault }: { vault: Vault<ConnConfig> }) {
   const message = (title: string, text: string) => setDialog({ type: 'message', title, text });
 
   useEffect(() => {
+    if (!vault) return;
     vault
       .list()
       .then(({ items, failed }) => {
@@ -81,7 +82,7 @@ export function App({ vault }: { vault: Vault<ConnConfig> }) {
         }
       })
       .catch((e) => message('Cannot load connections', errMsg(e)));
-  }, []);
+  }, [vault]);
 
   // ponytail: the beforeunload prompt is the only guard against closing the tab with unsaved SQLite edits.
   useEffect(() => {
@@ -165,6 +166,7 @@ export function App({ vault }: { vault: Vault<ConnConfig> }) {
     const old = conns.find((c) => c.id === cfg.id);
     const reconnect = !!old && !!sessions[cfg.id] && JSON.stringify({ ...old, name: '' }) !== JSON.stringify({ ...cfg, name: '' });
     if (reconnect && keepChanges(cfg.id)) return;
+    if (!vault) throw new Error('Not logged in.');
     await vault.save(cfg);
     if (reconnect) disconnect(cfg.id);
     setConns((c) => (c.some((x) => x.id === cfg.id) ? c.map((x) => (x.id === cfg.id ? cfg : x)) : [...c, cfg]));
@@ -176,6 +178,7 @@ export function App({ vault }: { vault: Vault<ConnConfig> }) {
     const cfg = conns.find((c) => c.id === id);
     if (!cfg || !confirm(`Delete connection "${cfg.name}"?`) || keepChanges(id)) return;
     try {
+      if (!vault) throw new Error('Not logged in.');
       await vault.remove(id);
     } catch (e) {
       return message('Cannot delete connection', errMsg(e));

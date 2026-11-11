@@ -25,9 +25,24 @@ function Root() {
       });
   }, []);
 
-  if (vault) return <App vault={vault} />;
-  if (connecting) return <p class="msg" role="status">Connecting to relay...</p>;
-  return <Login initialUrl={saved?.url ?? ''} initialError={error} onUnlock={setVault} />;
+  // The app stays visible but inert behind the login popup until the vault opens.
+  return (
+    <>
+      <div inert={!vault} style={{ display: 'contents' }}>
+        <App vault={vault} />
+      </div>
+      {!vault &&
+        (connecting ? (
+          <div class="overlay">
+            <p class="msg" role="status">
+              Connecting to relay...
+            </p>
+          </div>
+        ) : (
+          <Login initialUrl={saved?.url ?? ''} initialError={error} onUnlock={setVault} />
+        ))}
+    </>
+  );
 }
 
 render(<Root />, document.getElementById('app')!);
