@@ -123,6 +123,8 @@ async fn connection(
 ) -> Result<(), &'static str> {
     // Latency matters more than packing for database round trips; failure is harmless.
     let _ = stream.set_nodelay(true);
+    // tungstenite fixes the callback error type.
+    #[allow(clippy::result_large_err)]
     let check_origin = |request: &Request, response: Response| {
         let allowed = config.origins.is_empty()
             || request
