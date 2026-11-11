@@ -1,0 +1,52 @@
+name: wasm
+
+on:
+  push:
+    paths: ["wasm/**", ".github/workflows/wasm.yml"]
+  pull_request:
+    paths: ["wasm/**", ".github/workflows/wasm.yml"]
+
+defaults:
+  run:
+    working-directory: wasm
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      mongo:
+        image: mongo:7
+        env:
+          MONGO_INITDB_ROOT_USERNAME: root
+          MONGO_INITDB_ROOT_PASSWORD: example
+        ports: ["27017:27017"]
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand(\"ping\")'"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: wasm
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo clippy --lib --target wasm32-unknown-unknown -- -D warnings
+      - run: cargo test
+        env:
+          YIJI_TEST_PG: 127.0.0.1:5432,postgres,postgres,postgres
+          YIJI_TEST_MONGO: 127.0.0.1:27017,root,example
+      - uses: jetli/wasm-pack-action@v0.4.0
+      - run: wasm-pack build --target web
+      - run: cargo fmt --check
+        if: always()
