@@ -267,8 +267,7 @@ export function ConnDialog(props: {
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const text = (k: TextKey, type = 'text') => ({
-    type,
+  const text = (k: TextKey) => ({
     value: cfg[k],
     onInput: (e: Event) => setCfg((c) => ({ ...c, [k]: (e.currentTarget as HTMLInputElement).value })),
   });
@@ -379,7 +378,7 @@ export function ConnDialog(props: {
                   </label>
                   <label class="field">
                     <span>Auth token</span>
-                    <input {...text('authToken', 'password')} autocomplete="off" />
+                    <input {...text('authToken')} type="password" autocomplete="off" />
                   </label>
                 </>
               )}
@@ -416,7 +415,7 @@ export function ConnDialog(props: {
               </label>
               <label class="field">
                 <span>Password</span>
-                <input {...text('password', 'password')} autocomplete="off" />
+                <input {...text('password')} type="password" autocomplete="off" />
               </label>
               <label class="field">
                 <span>Relay URL</span>
@@ -424,7 +423,7 @@ export function ConnDialog(props: {
               </label>
               <label class="field">
                 <span>Relay token</span>
-                <input {...text('relayToken', 'password')} autocomplete="off" />
+                <input {...text('relayToken')} type="password" autocomplete="off" />
               </label>
             </>
           )}
