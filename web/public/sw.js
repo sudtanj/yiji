@@ -31,6 +31,7 @@ self.addEventListener('fetch', (e) => {
   if (req.mode === 'navigate') {
     // Network first so a new deploy is picked up; a slow or dead network falls back to the cache.
     const net = fetch(req).then(store);
+    net.catch(() => {}); // the timeout may win; a late failure is handled by the fallback
     const slow = new Promise((resolve) => setTimeout(resolve, NAV_TIMEOUT_MS, null));
     e.respondWith(
       Promise.race([net, slow])

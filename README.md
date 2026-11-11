@@ -11,6 +11,8 @@ Status: early development. Nothing is released yet.
 
 Browsers cannot open TCP connections, so PostgreSQL and MongoDB traffic goes through `yiji-relay`. The relay passes bytes between a WebSocket and the database. It does not read queries or results, and it runs fine on a single-board computer. The database protocols themselves run in the browser, in Rust compiled to WebAssembly.
 
+The hosted app only connects to `https://` and `wss://` addresses, so put the relay behind TLS (Cloudflare Tunnel, Tailscale or a reverse proxy).
+
 Saved connections are encrypted in the browser with your master password, then stored in a Turso database you own (or in the browser if you have none).
 
 ## Layout

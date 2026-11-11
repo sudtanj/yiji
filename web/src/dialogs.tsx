@@ -20,10 +20,9 @@ export function Modal(props: {
     window.addEventListener('keydown', h);
     return () => window.removeEventListener('keydown', h);
   }, [onClose]);
-  useEffect(() => {
-    const opener = document.activeElement as HTMLElement | null;
-    return () => opener?.focus?.();
-  }, []);
+  // Read during the first render, before an autoFocus input in the dialog takes focus.
+  const [opener] = useState(() => document.activeElement as HTMLElement | null);
+  useEffect(() => () => opener?.focus?.(), [opener]);
   return (
     <div class="overlay" role="dialog" aria-modal="true" aria-label={props.title}>
       <form

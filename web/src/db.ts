@@ -186,8 +186,11 @@ async function connectMongo(cfg: ConnConfig): Promise<Session> {
   return {
     run: async (text) => {
       // ponytail: only re-serialised when "$db" is present, since JSON.parse loses int64 precision.
-      if (!/"\$db"/.test(text)) return replyToGrid(await command(defaultDb, text));
-      const { $db, ...cmd } = JSON.parse(text);
+      if (!/"\$db"\s*:/.test(text)) return replyToGrid(await command(defaultDb, text));
+      const parsed: unknown = JSON.parse(text);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Command must be a JSON object');
+      const { $db, ...cmd } = parsed as Record<string, unknown>;
+      if ($db === undefined) return replyToGrid(await command(defaultDb, text));
       if (typeof $db !== 'string') throw new Error('"$db" must be a string');
       return replyToGrid(await command($db, JSON.stringify(cmd)));
     },

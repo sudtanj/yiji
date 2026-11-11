@@ -104,7 +104,10 @@ export function App({ vault }: { vault: Vault<ConnConfig> }) {
     setStatus(`Connecting to ${cfg.name}...`);
     try {
       const s = await connect(cfg);
-      if (deleted.current.has(id)) return s.close();
+      if (deleted.current.has(id)) {
+        setStatus('Ready');
+        return s.close();
+      }
       setSessions((p) => ({ ...p, [id]: s }));
       setStatus(`Connected to ${cfg.name}`);
     } catch (e) {
