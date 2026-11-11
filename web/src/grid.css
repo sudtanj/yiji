@@ -1,0 +1,26 @@
+.vgrid { height: 100%; overflow: auto; position: relative; font-family: var(--font-mono); font-size: 12px; color: var(--fg); }
+.vgrid:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+.vg-head { position: sticky; top: 0; z-index: 3; display: flex; height: var(--row-h, 24px); background: var(--panel-2); font-family: var(--font-ui); font-weight: 600; }
+.vg-body { position: relative; }
+.vg-row { position: absolute; left: 0; display: flex; height: var(--row-h, 24px); }
+.vg-row:hover { background: var(--hover); }
+.vg-cell { flex: none; box-sizing: border-box; height: var(--row-h, 24px); padding: 0 8px; line-height: calc(var(--row-h, 24px) - 1px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; user-select: text; }
+.vg-rn { position: sticky; left: 0; z-index: 1; background: var(--panel-2); color: var(--muted); text-align: right; }
+.vg-null { color: var(--muted); font-style: italic; }
+.pager { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; }
+.pager button { padding: 0 8px; height: 20px; background: var(--panel-2); color: var(--fg); border: 1px solid var(--border); border-radius: 2px; }
+.pager button:hover:not(:disabled) { background: var(--hover); }
+.pager button:disabled { color: var(--muted); opacity: 0.6; }
+.pager-range { min-width: 110px; text-align: center; color: var(--muted); }
+.footer.has-pager { display: flex; align-items: center; gap: 8px; }
+.results { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.subtabs { display: flex; align-items: center; background: var(--panel); border-bottom: 1px solid var(--border); }
+.subtab { padding: 2px 12px; background: none; border: 0; border-right: 1px solid var(--border); border-bottom: 2px solid transparent; color: var(--muted); }
+.subtab.active { background: var(--bg); color: var(--fg); border-bottom-color: var(--accent); }
+.results-body { flex: 1; min-height: 0; overflow: auto; }
+.footer { min-height: 20px; padding: 2px 8px; background: var(--panel); border-top: 1px solid var(--border); color: var(--muted); }
+@media (max-width: 720px) {
+  .subtab { min-height: var(--hit); }
+  .pager button { height: var(--hit); min-width: var(--hit); }
+  .footer.has-pager { flex-wrap: wrap; }
+}

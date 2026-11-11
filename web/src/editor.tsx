@@ -1,20 +1,47 @@
 import { json } from '@codemirror/lang-json';
 import { PostgreSQL, SQLite, sql } from '@codemirror/lang-sql';
+import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { EditorState } from '@codemirror/state';
 import { EditorView, placeholder } from '@codemirror/view';
 import { basicSetup } from 'codemirror';
+import { tags as t } from '@lezer/highlight';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { type Kind, type Session, type Target, notConnected } from './db';
 import { GridPane, ResultPane, footer, useQuery } from './grid';
 import { Icon } from './icons';
+import { PAGE_SIZE } from './paging';
 
 export const EXECUTE_EVENT = 'yiji:execute';
 
-const theme = EditorView.theme({
-  '&': { height: '100%', fontSize: '13px' },
-  '.cm-scroller': { fontFamily: 'Consolas, "DejaVu Sans Mono", monospace' },
-  '.cm-gutters': { background: '#f0f0f0', color: '#666', borderRight: '1px solid #d0d0d0' },
-});
+const highlight = HighlightStyle.define([
+  { tag: [t.keyword, t.operatorKeyword], color: '#7bb4ff' },
+  { tag: [t.string, t.special(t.string)], color: '#8fd6a4' },
+  { tag: [t.number, t.bool, t.null], color: '#e6b673' },
+  { tag: t.comment, color: '#6b7686', fontStyle: 'italic' },
+  { tag: [t.typeName, t.className, t.function(t.variableName)], color: '#c3a6ff' },
+  { tag: [t.propertyName, t.attributeName], color: '#82aaff' },
+]);
+
+const theme = EditorView.theme(
+  {
+    '&': { height: '100%', fontSize: '13px', color: 'var(--fg)', backgroundColor: 'var(--bg)' },
+    '.cm-scroller': { fontFamily: 'var(--font-mono)' },
+    '.cm-content': { caretColor: 'var(--fg)' },
+    '&.cm-focused': { outline: 'none' },
+    '.cm-cursor': { borderLeftColor: 'var(--fg)' },
+    '.cm-gutters': { backgroundColor: 'var(--panel)', color: 'var(--muted)', border: 'none', borderRight: '1px solid var(--border)' },
+    '.cm-activeLine': { backgroundColor: 'var(--hover)' },
+    '.cm-activeLineGutter': { backgroundColor: 'var(--hover)', color: 'var(--fg)' },
+    '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection': {
+      backgroundColor: 'var(--sel)',
+    },
+    '.cm-tooltip': { backgroundColor: 'var(--panel-2)', color: 'var(--fg)', border: '1px solid var(--border)' },
+    '.cm-tooltip-autocomplete ul li[aria-selected]': { backgroundColor: 'var(--accent)', color: 'var(--accent-fg)' },
+    '.cm-panels': { backgroundColor: 'var(--panel)', color: 'var(--fg)' },
+    '.cm-placeholder': { color: 'var(--muted)' },
+  },
+  { dark: true },
+);
 
 /** Selection if any; for SQL, otherwise the block of lines around the cursor up to the nearest blank lines. */
 function pickStatement(state: EditorState, kind: Kind): string {
@@ -52,6 +79,7 @@ export function SqlTab({ id, kind, session, active }: { id: string; kind: Kind; 
         extensions: [
           basicSetup,
           theme,
+          syntaxHighlighting(highlight),
           kind === 'mongo' ? json() : sql({ dialect: kind === 'postgres' ? PostgreSQL : SQLite }),
           ...(kind === 'mongo' ? [placeholder('{"find":"users","filter":{},"limit":200}')] : []),
         ],
@@ -99,13 +127,22 @@ export function TableTab({ target, session }: { target: Target; session?: Sessio
   const [sub, setSub] = useState<'props' | 'data'>(hasProps ? 'props' : 'data');
   const [props, loadProps] = useQuery();
   const [data, loadData] = useQuery();
+  const [page, setPage] = useState(0);
 
-  const refresh = () => loadData(() => (session ? session.rows(target) : Promise.reject(notConnected())));
+  const load = (p: number) => {
+    setPage(p);
+    return loadData(() => (session ? session.rows(target, p * PAGE_SIZE, PAGE_SIZE) : Promise.reject(notConnected())));
+  };
   useEffect(() => {
-    refresh();
+    load(0);
     const columns = session?.columns;
     if (columns) loadProps(() => columns(target));
   }, [session]);
+
+  // ponytail: no total count (a full count is expensive), so Next is enabled until a short page comes back.
+  const busy = data.state === 'busy';
+  const n = data.state === 'ok' ? data.grid.rows.length : 0;
+  const first = page * PAGE_SIZE;
 
   return (
     <div class="table-tab">
@@ -119,7 +156,7 @@ export function TableTab({ target, session }: { target: Target; session?: Sessio
           Data
         </button>
         {sub === 'data' && (
-          <button class="tb" title="Refresh" aria-label="Refresh" onClick={refresh}>
+          <button class="tb" title="Refresh" aria-label="Refresh" onClick={() => load(page)}>
             <Icon n="refresh" />
           </button>
         )}
@@ -127,8 +164,22 @@ export function TableTab({ target, session }: { target: Target; session?: Sessio
       <div class="results-body">
         <GridPane result={sub === 'props' ? props : data} name={sub === 'props' ? 'properties' : 'data'} />
       </div>
-      <div class="footer" role="status">
-        {sub === 'data' ? footer(data) : ''}
+      <div class={`footer${sub === 'data' ? ' has-pager' : ''}`}>
+        <span role="status">{sub === 'data' ? footer(data) : ''}</span>
+        {sub === 'data' && (
+          <span class="pager">
+            <button disabled={busy || page === 0} onClick={() => load(0)}>
+              First
+            </button>
+            <button disabled={busy || page === 0} onClick={() => load(page - 1)}>
+              Prev
+            </button>
+            <span class="pager-range">{n ? `rows ${first + 1}–${first + n}` : busy ? '' : 'no rows'}</span>
+            <button disabled={busy || n < PAGE_SIZE} onClick={() => load(page + 1)}>
+              Next
+            </button>
+          </span>
+        )}
       </div>
     </div>
   );

@@ -1,5 +1,6 @@
 import { createClient } from '@libsql/client/web';
 import { replyToGrid } from './mongo';
+import { findPage, pageSql } from './paging';
 import { withTimeout } from './util';
 
 export type Kind = 'postgres' | 'mongo' | 'sqlite';
@@ -49,7 +50,8 @@ export interface Session {
   roots(): Promise<Item[]>;
   /** Absent for MongoDB, which has no column metadata. */
   columns?(t: Target): Promise<Grid>;
-  rows(t: Target): Promise<Grid>;
+  /** One page of a table or collection, in natural order. */
+  rows(t: Target, offset: number, limit: number): Promise<Grid>;
   close(): void;
   /** Local SQLite only: downloads the in-memory database. */
   save?(): void;
@@ -67,8 +69,6 @@ function guarded<T extends { close(): void }>(attempt: Promise<T>): Promise<T> {
     throw e;
   });
 }
-
-const ROW_LIMIT = 200;
 
 export const notConnected = () => new Error('Not connected. Select the connection and click Connect.');
 
@@ -150,7 +150,7 @@ function sqlSession(
           ? `select column_name as "Name", data_type as "Type", is_nullable as "Nullable" from information_schema.columns where table_schema = ${lit(t.schema!)} and table_name = ${lit(t.name)} order by ordinal_position`
           : `select name as "Name", type as "Type", case "notnull" when 0 then 'YES' else 'NO' end as "Nullable" from pragma_table_info(${lit(t.name)})`,
       ),
-    rows: (t) => exec(`select * from ${t.schema ? `${ident(t.schema)}.` : ''}${ident(t.name)} limit ${ROW_LIMIT}`),
+    rows: (t, offset, limit) => exec(pageSql(`${t.schema ? `${ident(t.schema)}.` : ''}${ident(t.name)}`, offset, limit)),
   };
 }
 
@@ -199,8 +199,7 @@ async function connectMongo(cfg: ConnConfig): Promise<Session> {
       const reply = JSON.parse(await command('admin', '{"listDatabases":1,"nameOnly":true}'));
       return (reply.databases as { name: string }[]).map((d): Item => ({ label: d.name, icon: 'db', kids: collections(d.name) }));
     },
-    rows: async (t) =>
-      replyToGrid(await command(t.db!, JSON.stringify({ find: t.name, limit: ROW_LIMIT, batchSize: ROW_LIMIT }))),
+    rows: async (t, offset, limit) => replyToGrid(await command(t.db!, findPage(t.name, offset, limit))),
   };
 }
 
