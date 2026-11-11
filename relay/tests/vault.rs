@@ -1,3 +1,4 @@
+use std::slice::from_ref;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -121,7 +122,7 @@ async fn vault_round_trip_against_libsql() {
 
     let first = row(&a, "one", 1);
     assert_eq!(call(&mut ws, &with_row("create", &first)).await, json!({}));
-    assert_eq!(mine(&call(&mut ws, LIST).await, &prefix), [first.clone()]);
+    assert_eq!(mine(&call(&mut ws, LIST).await, &prefix), from_ref(&first));
 
     let ignored = row(&a, "two", 2);
     assert_eq!(
@@ -134,7 +135,7 @@ async fn vault_round_trip_against_libsql() {
     assert_eq!(call(&mut ws, &with_row("put", &replaced)).await, json!({}));
     assert_eq!(
         mine(&call(&mut ws, LIST).await, &prefix),
-        [replaced.clone()]
+        from_ref(&replaced)
     );
 
     let awkward = "q'\"; DROP TABLE connections;-- \u{e9}\u{4e2d}\n";
