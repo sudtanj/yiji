@@ -63,8 +63,8 @@ jobs:
         with:
           node-version: 22
       - run: npm install
-      # Runner apt mirrors flake; refresh the index and retry once.
-      - run: sudo apt-get update && (npx playwright install --with-deps chromium || (sleep 30 && sudo apt-get update && npx playwright install --with-deps chromium))
+      # The runner image already has the Chromium libraries; --with-deps only adds fonts from flaky apt mirrors.
+      - run: npx playwright install chromium
       - name: Wait for the site
         run: curl -fsS -o /dev/null --retry 12 --retry-delay 10 --retry-all-errors "$SMOKE_URL"
       - name: Smoke test the live site
