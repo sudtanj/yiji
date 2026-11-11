@@ -4,14 +4,14 @@ use crate::{
     transport::{self, Io},
 };
 use futures::lock::Mutex;
-use std::pin::Pin;
+use std::{cell::RefCell, pin::Pin, rc::Rc};
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 #[wasm_bindgen]
 pub struct PgConn {
-    client: Option<tokio_postgres::Client>,
+    client: RefCell<Option<Rc<tokio_postgres::Client>>>,
 }
 
 #[wasm_bindgen]
@@ -32,23 +32,25 @@ impl PgConn {
             let _ = connection.await;
         });
         Ok(PgConn {
-            client: Some(client),
+            client: RefCell::new(Some(Rc::new(client))),
         })
     }
 
     pub async fn query(&self, sql: String) -> Result<String, String> {
-        let client = self.client.as_ref().ok_or("connection closed")?;
-        pg::query(client, &sql).await
+        let client = self.client.borrow().clone().ok_or("connection closed")?;
+        pg::query(&client, &sql).await
     }
 
-    pub fn close(&mut self) {
-        self.client = None;
+    pub fn close(&self) {
+        self.client.borrow_mut().take();
     }
 }
 
+type Session = Mutex<Mongo<Pin<Box<dyn Io>>>>;
+
 #[wasm_bindgen]
 pub struct MongoConn {
-    conn: Option<Mutex<Mongo<Pin<Box<dyn Io>>>>>,
+    conn: RefCell<Option<Rc<Session>>>,
 }
 
 #[wasm_bindgen]
@@ -65,17 +67,17 @@ impl MongoConn {
         let io = transport::open(&relay_url, &relay_token, &host, port).await?;
         let conn = Mongo::connect(io, &user, &password, &auth_db).await?;
         Ok(MongoConn {
-            conn: Some(Mutex::new(conn)),
+            conn: RefCell::new(Some(Rc::new(Mutex::new(conn)))),
         })
     }
 
     #[wasm_bindgen(js_name = runCommand)]
     pub async fn run_command(&self, db: String, cmd_json: String) -> Result<String, String> {
-        let conn = self.conn.as_ref().ok_or("connection closed")?;
+        let conn = self.conn.borrow().clone().ok_or("connection closed")?;
         conn.lock().await.run_json(&db, &cmd_json).await
     }
 
-    pub fn close(&mut self) {
-        self.conn = None;
+    pub fn close(&self) {
+        self.conn.borrow_mut().take();
     }
 }

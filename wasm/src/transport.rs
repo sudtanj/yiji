@@ -25,11 +25,14 @@ pub async fn open(
         .map_err(|e| e.to_string())?;
 
     let hello = serde_json::json!({ "token": token, "host": host, "port": port });
-    ws.send(WsMessage::Text(hello.to_string()))
-        .await
-        .map_err(|e| e.to_string())?;
+    // A failed send usually means the relay already closed; its close reason is more useful.
+    let sent = ws.send(WsMessage::Text(hello.to_string())).await;
+    let reply = match sent {
+        Ok(()) => ws.next().await,
+        Err(_) => None,
+    };
 
-    match ws.next().await {
+    match reply {
         Some(WsMessage::Text(reply)) if reply == "ok" => Ok(Box::pin(ws.into_io())),
         Some(_) => Err("unexpected reply from relay".to_string()),
         None => {

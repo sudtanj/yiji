@@ -14,7 +14,11 @@ fn hmac(key: &[u8], message: &[u8]) -> Vec<u8> {
 
 /// The `client-first-message-bare` part; the wire message is `n,,` followed by this.
 pub fn client_first_bare(user: &str, nonce: &str) -> String {
-    format!("n={},r={}", user.replace('=', "=3D").replace(',', "=2C"), nonce)
+    format!(
+        "n={},r={}",
+        user.replace('=', "=3D").replace(',', "=2C"),
+        nonce
+    )
 }
 
 /// Returns the client-final-message and the server signature expected in the server-final-message.

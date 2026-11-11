@@ -30,10 +30,29 @@ async fn auth_list_databases_and_find() {
     assert!(reply["databases"].is_array());
 
     let db = "yiji_test";
-    run(&mut conn, db, r#"{"delete":"items","deletes":[{"q":{},"limit":0}]}"#).await;
-    run(&mut conn, db, r#"{"insert":"items","documents":[{"a":1}]}"#).await;
+    run(
+        &mut conn,
+        db,
+        r#"{"delete":"items","deletes":[{"q":{},"limit":0}]}"#,
+    )
+    .await;
+    run(
+        &mut conn,
+        db,
+        r#"{"insert":"items","documents":[{"_id":{"$oid":"507f1f77bcf86cd799439011"},"a":1}]}"#,
+    )
+    .await;
     let reply = run(&mut conn, db, r#"{"find":"items","filter":{}}"#).await;
     assert_eq!(reply["cursor"]["firstBatch"][0]["a"], 1);
+
+    // An untyped string id would match nothing; only a real ObjectId finds the document.
+    let by_id = r#"{"find":"items","filter":{"_id":{"$oid":"507f1f77bcf86cd799439011"}}}"#;
+    let reply = run(&mut conn, db, by_id).await;
+    assert_eq!(reply["cursor"]["firstBatch"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        reply["cursor"]["firstBatch"][0]["_id"]["$oid"],
+        "507f1f77bcf86cd799439011"
+    );
 
     let failed = conn.run_json(db, r#"{"noSuchCommand":1}"#).await;
     assert!(failed.unwrap_err().contains("no such command"));

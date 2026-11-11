@@ -2,7 +2,6 @@ use crate::scram;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use bson::{doc, spec::BinarySubtype, Binary, Bson, Document};
 use futures::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use serde_json::Value;
 use std::fmt::Display;
 
 const OP_MSG: i32 = 2013;
@@ -43,10 +42,8 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Mongo<S> {
 
     /// `cmd_json` and the returned reply are relaxed Extended JSON.
     pub async fn run_json(&mut self, db: &str, cmd_json: &str) -> Result<String> {
-        let Value::Object(map) = serde_json::from_str(cmd_json).map_err(fmt_err)? else {
-            return Err("command must be a JSON object".to_string());
-        };
-        let cmd = Document::try_from(map).map_err(fmt_err)?;
+        // Deserializing straight into Document turns {"$oid":..}, {"$date":..} etc. into typed BSON.
+        let cmd: Document = serde_json::from_str(cmd_json).map_err(fmt_err)?;
         let reply = self.run_command(db, cmd).await?;
         Ok(Bson::Document(reply).into_relaxed_extjson().to_string())
     }
@@ -73,7 +70,9 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Mongo<S> {
 
         let (response_to, reply) = decode(&buf)?;
         if response_to != request_id {
-            return Err(format!("reply to request {response_to}, expected {request_id}"));
+            return Err(format!(
+                "reply to request {response_to}, expected {request_id}"
+            ));
         }
         if !is_ok(&reply) {
             return Err(reply
@@ -198,7 +197,10 @@ mod tests {
     fn op_msg_round_trip() {
         let cmd = doc! { "find": "users", "limit": 200, "$db": "app" };
         let msg = encode(7, &cmd).unwrap();
-        assert_eq!(i32::from_le_bytes(msg[0..4].try_into().unwrap()) as usize, msg.len());
+        assert_eq!(
+            i32::from_le_bytes(msg[0..4].try_into().unwrap()) as usize,
+            msg.len()
+        );
         assert_eq!(i32::from_le_bytes(msg[4..8].try_into().unwrap()), 7);
         assert_eq!(i32::from_le_bytes(msg[12..16].try_into().unwrap()), 2013);
         assert_eq!(msg[20], 0);
@@ -215,6 +217,18 @@ mod tests {
         msg[12] = 0xdd;
         msg.push(0);
         assert!(decode(&msg).is_err());
+    }
+
+    #[test]
+    fn extended_json_input_becomes_typed_bson() {
+        let cmd: Document = serde_json::from_str(
+            r#"{"find":"c","filter":{"_id":{"$oid":"507f1f77bcf86cd799439011"},"t":{"$date":"2024-01-02T03:04:05Z"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(cmd.keys().next().unwrap(), "find");
+        let filter = cmd.get_document("filter").unwrap();
+        assert!(matches!(filter.get("_id"), Some(Bson::ObjectId(_))));
+        assert!(matches!(filter.get("t"), Some(Bson::DateTime(_))));
     }
 
     #[test]

@@ -20,9 +20,7 @@ async fn simple_query_against_postgres() {
     };
 
     let stream = tokio::net::TcpStream::connect(addr).await.unwrap();
-    let (client, connection) = pg::connect(stream, user, password, database)
-        .await
-        .unwrap();
+    let (client, connection) = pg::connect(stream, user, password, database).await.unwrap();
     tokio::spawn(connection);
 
     let reply = run(&client, "select 1 as n, null as missing").await;

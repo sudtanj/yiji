@@ -49,9 +49,11 @@ pub async fn query(client: &Client, sql: &str) -> Result<String, String> {
     Ok(to_json(msgs).to_string())
 }
 
+type ResultSet = (Vec<String>, Vec<Vec<Option<String>>>);
+
 /// Result of the last statement that returned rows, else the row count of the last statement.
 fn to_json(msgs: Vec<Msg>) -> Value {
-    let mut current: Option<(Vec<String>, Vec<Vec<Option<String>>>)> = None;
+    let mut current: Option<ResultSet> = None;
     let mut last_rows = None;
     let mut affected = None;
     for msg in msgs {
