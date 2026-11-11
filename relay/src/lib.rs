@@ -235,7 +235,10 @@ mod tests {
     #[test]
     fn hello_parses() {
         let hello = parse_hello(r#"{"token":"t","host":"db.lan","port":5432}"#).unwrap();
-        assert_eq!((hello.token.as_str(), hello.host.as_str(), hello.port), ("t", "db.lan", 5432));
+        assert_eq!(
+            (hello.token.as_str(), hello.host.as_str(), hello.port),
+            ("t", "db.lan", 5432)
+        );
     }
 
     #[test]

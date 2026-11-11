@@ -26,7 +26,11 @@ fn positive<T: FromStr + Default + PartialEq>(name: &str) -> Result<Option<T>, S
 
 fn from_env() -> Result<(Config, String), String> {
     let text = |name| var(name).map(Option::unwrap_or_default);
-    let (token, allow, origins) = (text("YIJI_TOKEN")?, text("YIJI_ALLOW")?, text("YIJI_ORIGINS")?);
+    let (token, allow, origins) = (
+        text("YIJI_TOKEN")?,
+        text("YIJI_ALLOW")?,
+        text("YIJI_ORIGINS")?,
+    );
     let mut config = Config::new(&token, &allow, &origins)?;
     if let Some(n) = positive("YIJI_MAX_CONN")? {
         config.max_conn = n;

@@ -66,11 +66,21 @@ async fn relays_bytes_and_refuses_bad_requests() {
     let mut ws = hello(&url, TOKEN, echo).await;
     assert_eq!(ws.next().await.unwrap().unwrap(), Message::text("ok"));
     ws.send(Message::binary(vec![1, 2, 3])).await.unwrap();
-    assert_eq!(ws.next().await.unwrap().unwrap(), Message::binary(vec![1, 2, 3]));
+    assert_eq!(
+        ws.next().await.unwrap().unwrap(),
+        Message::binary(vec![1, 2, 3])
+    );
     ws.send(Message::binary(vec![9; 100])).await.unwrap();
-    assert_eq!(ws.next().await.unwrap().unwrap(), Message::binary(vec![9; 100]));
+    assert_eq!(
+        ws.next().await.unwrap().unwrap(),
+        Message::binary(vec![9; 100])
+    );
 
-    expect_refusal(hello(&url, "x".repeat(32).as_str(), echo).await, "bad token").await;
+    expect_refusal(
+        hello(&url, "x".repeat(32).as_str(), echo).await,
+        "bad token",
+    )
+    .await;
     expect_refusal(hello(&url, TOKEN, echo + 1).await, "target not allowed").await;
 
     let (mut ws, _) = connect_async(url.as_str()).await.unwrap();
@@ -130,6 +140,9 @@ async fn websocket_close_ends_tcp() {
     let url = start_relay(&format!("127.0.0.1:{port}")).await;
     let mut ws = open(&url, port).await;
     ws.close(None).await.unwrap();
-    let n = timeout(Duration::from_secs(5), eof_rx).await.unwrap().unwrap();
+    let n = timeout(Duration::from_secs(5), eof_rx)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(n, 0);
 }
