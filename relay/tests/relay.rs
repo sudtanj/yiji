@@ -208,7 +208,9 @@ async fn message_over_16_mib_closes_connection() {
     let echo = start_echo().await;
     let url = start_relay(&format!("127.0.0.1:{echo}")).await;
     let mut ws = open(&url, echo).await;
-    let _ = ws.send(Message::binary(vec![0; 16 * 1024 * 1024 + 1])).await;
+    let _ = ws
+        .send(Message::binary(vec![0; 16 * 1024 * 1024 + 1]))
+        .await;
     let next = timeout(Duration::from_secs(10), ws.next()).await.unwrap();
     assert!(!matches!(next, Some(Ok(Message::Binary(_)))));
 }
@@ -233,7 +235,10 @@ async fn pending_cap_holds_back_new_connections() {
 
     let (first, _) = connect_async(url.as_str()).await.unwrap();
     let blocked = timeout(Duration::from_millis(500), connect_async(url.as_str())).await;
-    assert!(blocked.is_err(), "a second client was served while one is pending");
+    assert!(
+        blocked.is_err(),
+        "a second client was served while one is pending"
+    );
 
     drop(first);
     timeout(Duration::from_secs(5), open(&url, echo))
