@@ -1,6 +1,6 @@
 import { createClient } from '@libsql/client/web';
 import type { Backend, Row } from './store';
-import { withTimeout } from './util';
+import { retryable, withTimeout } from './util';
 
 export interface TursoSettings {
   url: string;
@@ -14,12 +14,27 @@ const TURSO_TIMEOUT = 15_000;
 // ponytail: the Turso URL and token sit in localStorage in clear text because they are needed
 // before the master password can be checked (the salt itself lives in Turso). The connection
 // records stay encrypted; the token only grants access to those ciphertexts.
-export const loadSettings = (): TursoSettings | null => JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? 'null');
-
-export function saveSettings(s: TursoSettings | null) {
-  if (s) localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
-  else localStorage.removeItem(SETTINGS_KEY);
+// ponytail: unreadable stored settings count as "none" so the app can still start.
+export function loadSettings(): TursoSettings | null {
+  try {
+    return JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? 'null');
+  } catch {
+    return null;
+  }
 }
+
+export const hasStoredSettings = () => localStorage.getItem(SETTINGS_KEY) !== null;
+
+export function clearSettings() {
+  localStorage.removeItem(SETTINGS_KEY);
+}
+
+/** Returns an error message, or null when `url` can be saved. The token may be empty (sqld without auth). */
+export function checkSettings(url: string): string | null {
+  return /^(https|libsql):\/\/./.test(url) ? null : 'The URL must start with https:// or libsql://.';
+}
+
+export const saveSettings = (s: TursoSettings) => localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
 
 function localBackend(): Backend {
   const read = (): Row[] => JSON.parse(localStorage.getItem(LOCAL_KEY) ?? '[]');
@@ -27,24 +42,30 @@ function localBackend(): Backend {
   return {
     list: async () => read(),
     put: async (row) => write([...read().filter((r) => r.id !== row.id), row]),
+    create: async (row) => {
+      const rows = read();
+      if (!rows.some((r) => r.id === row.id)) write([...rows, row]);
+    },
     remove: async (id) => write(read().filter((r) => r.id !== id)),
   };
 }
 
 function tursoBackend({ url, token }: TursoSettings): Backend {
-  const client = createClient({ url, authToken: token });
-  let ready: Promise<unknown> | undefined;
-  const run = async (sql: string, args: (string | number)[] = []) => {
-    ready ??= withTimeout(
+  const client = createClient({ url, authToken: token || undefined });
+  const ready = retryable(() =>
+    withTimeout(
       client.execute(
         'CREATE TABLE IF NOT EXISTS connections (id TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at INTEGER NOT NULL)',
       ),
       TURSO_TIMEOUT,
       'Turso',
-    );
-    await ready;
+    ),
+  );
+  const run = async (sql: string, args: (string | number)[] = []) => {
+    await ready();
     return withTimeout(client.execute({ sql, args }), TURSO_TIMEOUT, 'Turso');
   };
+  const insert = 'INSERT INTO connections (id, data, updated_at) VALUES (?, ?, ?)';
   return {
     list: async () =>
       (await run('SELECT id, data, updated_at FROM connections')).rows.map((r) => ({
@@ -53,11 +74,14 @@ function tursoBackend({ url, token }: TursoSettings): Backend {
         updated_at: Number(r.updated_at),
       })),
     put: async (row) => {
-      await run('INSERT OR REPLACE INTO connections (id, data, updated_at) VALUES (?, ?, ?)', [
+      await run(`${insert} ON CONFLICT(id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at`, [
         row.id,
         row.data,
         row.updated_at,
       ]);
+    },
+    create: async (row) => {
+      await run(`${insert} ON CONFLICT(id) DO NOTHING`, [row.id, row.data, row.updated_at]);
     },
     remove: async (id) => {
       await run('DELETE FROM connections WHERE id = ?', [id]);

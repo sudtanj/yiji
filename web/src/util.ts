@@ -8,3 +8,13 @@ export function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise
 
 // yiji-wasm rejects with plain strings, everything else with Error.
 export const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+
+/** Caches a successful call; a failed one is forgotten so the next call retries. */
+export function retryable<T>(fn: () => Promise<T>): () => Promise<T> {
+  let cached: Promise<T> | undefined;
+  return () =>
+    (cached ??= fn().catch((e) => {
+      cached = undefined;
+      throw e;
+    }));
+}

@@ -33,7 +33,7 @@ function pickStatement(state: EditorState, kind: Kind): string {
 export function SqlTab({ id, kind, session, active }: { id: string; kind: Kind; session?: Session; active: boolean }) {
   const host = useRef<HTMLDivElement>(null);
   const box = useRef<HTMLDivElement>(null);
-  const view = useRef<EditorView>();
+  const view = useRef<EditorView | undefined>(undefined);
   const [height, setHeight] = useState(200);
   const [result, run] = useQuery();
 

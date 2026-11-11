@@ -63,15 +63,34 @@ export function App({ vault }: { vault: Vault<ConnConfig> }) {
   const [status, setStatus] = useState('Ready');
   const scripts = useRef<Record<string, number>>({});
   const pending = useRef(new Set<string>());
+  const deleted = useRef(new Set<string>());
+  const leaving = useRef(false);
 
   const message = (title: string, text: string) => setDialog({ type: 'message', title, text });
 
   useEffect(() => {
     vault
       .list()
-      .then(setConns)
+      .then(({ items, failed }) => {
+        setConns(items);
+        if (failed) {
+          message(
+            'Some connections are hidden',
+            `${failed} saved connection(s) could not be decrypted or failed their integrity check.`,
+          );
+        }
+      })
       .catch((e) => message('Cannot load connections', errMsg(e)));
   }, []);
+
+  // ponytail: the beforeunload prompt is the only guard against closing the tab with unsaved SQLite edits.
+  useEffect(() => {
+    const warn = (e: BeforeUnloadEvent) => {
+      if (!leaving.current && Object.values(sessions).some((s) => s.dirty?.())) e.preventDefault();
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [sessions]);
 
   const active = tabs.find((t) => t.id === activeId) ?? tabs[tabs.length - 1];
   const cur = conns.find((c) => c.id === selId) ?? conns.find((c) => c.id === active?.connId);
@@ -85,11 +104,13 @@ export function App({ vault }: { vault: Vault<ConnConfig> }) {
     setStatus(`Connecting to ${cfg.name}...`);
     try {
       const s = await connect(cfg);
+      if (deleted.current.has(id)) return s.close();
       setSessions((p) => ({ ...p, [id]: s }));
       setStatus(`Connected to ${cfg.name}`);
     } catch (e) {
       setStatus(`Connection to ${cfg.name} failed`);
-      message('Connection failed', errMsg(e));
+      // A background connect must not replace a dialog the user is working in.
+      setDialog((d) => d ?? { type: 'message', title: 'Connection failed', text: errMsg(e) });
     } finally {
       pending.current.delete(id);
     }
@@ -99,6 +120,15 @@ export function App({ vault }: { vault: Vault<ConnConfig> }) {
     sessions[id]?.close();
     setSessions(({ [id]: _, ...rest }) => rest);
     setStatus('Disconnected');
+  };
+
+  // True when the user chose to keep a local SQLite database that has unsaved changes.
+  const keepChanges = (id: string) =>
+    !!sessions[id]?.dirty?.() &&
+    !confirm('This SQLite database has unsaved changes (File > Save SQLite file). Discard them?');
+
+  const askDisconnect = (id: string) => {
+    if (!keepChanges(id)) disconnect(id);
   };
 
   const newScript = (connId = cur?.id) => {
@@ -128,8 +158,12 @@ export function App({ vault }: { vault: Vault<ConnConfig> }) {
   };
 
   const saveConn = async (cfg: ConnConfig) => {
+    // Renaming alone keeps the session; any other change needs a fresh connection.
+    const old = conns.find((c) => c.id === cfg.id);
+    const reconnect = !!old && !!sessions[cfg.id] && JSON.stringify({ ...old, name: '' }) !== JSON.stringify({ ...cfg, name: '' });
+    if (reconnect && keepChanges(cfg.id)) return;
     await vault.save(cfg);
-    if (sessions[cfg.id]) disconnect(cfg.id);
+    if (reconnect) disconnect(cfg.id);
     setConns((c) => (c.some((x) => x.id === cfg.id) ? c.map((x) => (x.id === cfg.id ? cfg : x)) : [...c, cfg]));
     setSelId(cfg.id);
     setDialog(null);
@@ -137,23 +171,24 @@ export function App({ vault }: { vault: Vault<ConnConfig> }) {
 
   const removeConn = async (id: string) => {
     const cfg = conns.find((c) => c.id === id);
-    if (!cfg || !confirm(`Delete connection "${cfg.name}"?`)) return;
+    if (!cfg || !confirm(`Delete connection "${cfg.name}"?`) || keepChanges(id)) return;
     try {
       await vault.remove(id);
     } catch (e) {
       return message('Cannot delete connection', errMsg(e));
     }
+    deleted.current.add(id);
     disconnect(id);
     setTabs((t) => t.filter((x) => x.connId !== id));
     setConns((c) => c.filter((x) => x.id !== id));
   };
 
-  const keys = useRef({ execute, newScript });
-  keys.current = { execute, newScript };
+  const keys = useRef({ execute, newScript, modal: false });
+  keys.current = { execute, newScript, modal: dialog !== null };
   useEffect(() => {
     // Capture phase so these win over CodeMirror's own Mod-Enter and Mod-] bindings.
     const onKey = (e: KeyboardEvent) => {
-      if (!(e.ctrlKey || e.metaKey) || (e.key !== 'Enter' && e.key !== ']')) return;
+      if (keys.current.modal || !(e.ctrlKey || e.metaKey) || (e.key !== 'Enter' && e.key !== ']')) return;
       e.preventDefault();
       e.stopPropagation();
       if (e.key === 'Enter') keys.current.execute();
@@ -178,7 +213,7 @@ export function App({ vault }: { vault: Vault<ConnConfig> }) {
     const on = !!sessions[id];
     return [
       { label: 'Connect', run: () => connectTo(id), disabled: on },
-      { label: 'Disconnect', run: () => disconnect(id), disabled: !on },
+      { label: 'Disconnect', run: () => askDisconnect(id), disabled: !on },
       { label: 'Edit Connection', run: () => setDialog({ type: 'conn', initial: conns.find((c) => c.id === id) }) },
       { label: 'Delete', run: () => removeConn(id) },
       { label: 'SQL Editor', run: () => newScript(id) },
@@ -192,11 +227,20 @@ export function App({ vault }: { vault: Vault<ConnConfig> }) {
       { label: 'New SQL script', hint: 'Ctrl+]', run: () => newScript() },
       { label: 'Save SQLite file', run: () => live?.save?.(), disabled: !live?.save },
       { label: 'Settings...', run: () => setDialog({ type: 'settings' }) },
-      { label: 'Lock', run: () => location.reload() },
+      {
+        label: 'Lock',
+        run: () => {
+          if (Object.keys(sessions).some(keepChanges)) return;
+          leaving.current = true;
+          location.reload();
+        },
+      },
     ],
     Database: [
       { label: 'Connect', run: () => connectTo(cur!.id), disabled: !cur || !!live },
-      { label: 'Disconnect', run: () => disconnect(cur!.id), disabled: !live },
+      { label: 'Disconnect', run: () => askDisconnect(cur!.id), disabled: !live },
+      { label: 'Edit Connection...', run: () => setDialog({ type: 'conn', initial: cur }), disabled: !cur },
+      { label: 'Delete', run: () => removeConn(cur!.id), disabled: !cur },
     ],
     'SQL Editor': [
       { label: 'New SQL script', hint: 'Ctrl+]', run: () => newScript() },
@@ -238,7 +282,7 @@ export function App({ vault }: { vault: Vault<ConnConfig> }) {
         {tool('menu', 'Database Navigator', () => setDrawer((d) => !d), false, 'only-phone')}
         {tool('newConn', 'New Database Connection', newConn)}
         {tool('plug', 'Connect', () => connectTo(cur!.id), !cur || !!live)}
-        {tool('unplug', 'Disconnect', () => disconnect(cur!.id), !live)}
+        {tool('unplug', 'Disconnect', () => askDisconnect(cur!.id), !live)}
         <span class="sep" />
         {tool('sql', 'SQL Editor (new script), Ctrl+]', () => newScript())}
         {tool('play', 'Execute SQL, Ctrl+Enter', execute, !runnable)}

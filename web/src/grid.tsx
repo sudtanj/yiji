@@ -1,6 +1,9 @@
-import { useState } from 'preact/hooks';
+import { useRef, useState } from 'preact/hooks';
 import type { Grid } from './db';
 import { errMsg } from './util';
+
+// ponytail: the whole result is fetched; only rendering is capped, to keep the DOM small.
+const MAX_ROWS = 1000;
 
 export type Result =
   | { state: 'idle' }
@@ -10,14 +13,16 @@ export type Result =
 
 export function useQuery(): [Result, (fn: () => Promise<Grid>) => Promise<void>] {
   const [result, setResult] = useState<Result>({ state: 'idle' });
+  const latest = useRef(0);
   const run = async (fn: () => Promise<Grid>) => {
+    const mine = ++latest.current;
     setResult({ state: 'busy' });
     const t0 = performance.now();
     try {
       const grid = await fn();
-      setResult({ state: 'ok', grid, ms: Math.round(performance.now() - t0) });
+      if (mine === latest.current) setResult({ state: 'ok', grid, ms: Math.round(performance.now() - t0) });
     } catch (e) {
-      setResult({ state: 'error', message: errMsg(e) });
+      if (mine === latest.current) setResult({ state: 'error', message: errMsg(e) });
     }
   };
   return [result, run];
@@ -42,7 +47,7 @@ function GridView({ grid }: { grid: Grid }) {
           </tr>
         </thead>
         <tbody>
-          {grid.rows.map((row, i) => (
+          {grid.rows.slice(0, MAX_ROWS).map((row, i) => (
             <tr>
               <td class="rn">{i + 1}</td>
               {row.map((v) =>
@@ -61,9 +66,11 @@ export function footer(r: Result): string {
   if (r.state === 'error') return 'Error';
   if (r.state !== 'ok') return '';
   const { grid, ms } = r;
-  return grid.columns.length
-    ? `${grid.rows.length} row(s) fetched - ${ms}ms`
-    : `${grid.rowsAffected ?? 0} row(s) affected - ${ms}ms`;
+  if (!grid.columns.length) {
+    return grid.rowsAffected == null ? `Statement executed - ${ms}ms` : `${grid.rowsAffected} row(s) affected - ${ms}ms`;
+  }
+  const n = grid.rows.length;
+  return n > MAX_ROWS ? `${MAX_ROWS} of ${n} rows shown - ${ms}ms` : `${n} row(s) fetched - ${ms}ms`;
 }
 
 export function ResultPane({ result, idle }: { result: Result; idle: string }) {

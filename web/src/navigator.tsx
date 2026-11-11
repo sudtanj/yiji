@@ -69,7 +69,11 @@ function Node(p: NodeProps) {
         aria-selected={p.picked === p.path}
         tabIndex={0}
         style={{ paddingLeft: 4 + p.depth * 16 }}
-        onClick={select}
+        onClick={() => {
+          select();
+          // On phones a single tap opens a table; there is no practical double-tap.
+          if (p.target && matchMedia('(max-width: 720px)').matches) activate();
+        }}
         onDblClick={activate}
         onKeyDown={(e) => e.key === 'Enter' && activate()}
         onContextMenu={(e) => {

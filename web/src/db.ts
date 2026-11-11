@@ -11,6 +11,8 @@ export interface ConnConfig {
   host: string;
   port: number;
   database: string;
+  /** MongoDB: default database for commands; empty means the auth database. */
+  mongoDb?: string;
   user: string;
   password: string;
   relayUrl: string;
@@ -51,10 +53,21 @@ export interface Session {
   close(): void;
   /** Local SQLite only: downloads the in-memory database. */
   save?(): void;
+  /** Local SQLite only: true while there are changes not yet downloaded. */
+  dirty?(): boolean;
 }
 
 const CONNECT_TIMEOUT = 15_000;
 const QUERY_TIMEOUT = 60_000;
+
+/** Times out a connect; if it still completes later, the late connection is closed. */
+function guarded<T extends { close(): void }>(attempt: Promise<T>): Promise<T> {
+  return withTimeout(attempt, CONNECT_TIMEOUT, 'Connect').catch((e) => {
+    attempt.then((c) => c.close(), () => {});
+    throw e;
+  });
+}
+
 const ROW_LIMIT = 200;
 
 export const notConnected = () => new Error('Not connected. Select the connection and click Connect.');
@@ -91,6 +104,7 @@ function sqlSession(
   exec: (sql: string) => Promise<Grid>,
   close: () => void,
   save?: () => void,
+  dirty?: () => boolean,
 ): Session {
   const names = async (sql: string) => (await exec(sql)).rows.map((r) => String(r[0]));
   const pg = dialect === 'pg';
@@ -114,6 +128,7 @@ function sqlSession(
     run: exec,
     close,
     save,
+    dirty,
     roots: async () =>
       pg
         ? [
@@ -141,10 +156,8 @@ function sqlSession(
 
 async function connectPg(cfg: ConnConfig): Promise<Session> {
   const w = await wasm();
-  const conn = await withTimeout(
+  const conn = await guarded(
     w.PgConn.connect(cfg.relayUrl, cfg.relayToken, cfg.host, cfg.port, cfg.user, cfg.password, cfg.database),
-    CONNECT_TIMEOUT,
-    'Connect',
   );
   return sqlSession(
     'pg',
@@ -157,10 +170,9 @@ async function connectPg(cfg: ConnConfig): Promise<Session> {
 async function connectMongo(cfg: ConnConfig): Promise<Session> {
   const w = await wasm();
   const authDb = cfg.database || 'admin';
-  const conn = await withTimeout(
+  const defaultDb = cfg.mongoDb || authDb;
+  const conn = await guarded(
     w.MongoConn.connect(cfg.relayUrl, cfg.relayToken, cfg.host, cfg.port, cfg.user, cfg.password, authDb),
-    CONNECT_TIMEOUT,
-    'Connect',
   );
   const command = (db: string, doc: string) => withTimeout(conn.runCommand(db, doc), QUERY_TIMEOUT, 'Command');
   const collections = (db: string) => async (): Promise<Item[]> => {
@@ -172,7 +184,13 @@ async function connectMongo(cfg: ConnConfig): Promise<Session> {
     }));
   };
   return {
-    run: async (text) => replyToGrid(await command(authDb, text)),
+    run: async (text) => {
+      // ponytail: only re-serialised when "$db" is present, since JSON.parse loses int64 precision.
+      if (!/"\$db"/.test(text)) return replyToGrid(await command(defaultDb, text));
+      const { $db, ...cmd } = JSON.parse(text);
+      if (typeof $db !== 'string') throw new Error('"$db" must be a string');
+      return replyToGrid(await command($db, JSON.stringify(cmd)));
+    },
     close: () => conn.close(),
     roots: async () => {
       const reply = JSON.parse(await command('admin', '{"listDatabases":1,"nameOnly":true}'));
@@ -218,15 +236,19 @@ async function connectLocal(cfg: ConnConfig): Promise<Session> {
     db.close();
     throw e;
   }
+  // total_changes misses DDL, so the schema cookie is part of the fingerprint.
+  const fingerprint = () => `${db.changes(true)}:${db.selectValue('pragma schema_version')}`;
+  let saved = fingerprint();
   const save = () => {
     const url = URL.createObjectURL(new Blob([capi.sqlite3_js_db_export(db.pointer!).slice()], { type: 'application/vnd.sqlite3' }));
     const a = document.createElement('a');
     a.href = url;
     a.download = file.name;
     a.click();
-    URL.revokeObjectURL(url);
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+    saved = fingerprint();
   };
-  return sqlSession('sqlite', cfg.name, exec, () => db.close(), save);
+  return sqlSession('sqlite', cfg.name, exec, () => db.close(), save, () => fingerprint() !== saved);
 }
 
 async function connectRemote(cfg: ConnConfig): Promise<Session> {

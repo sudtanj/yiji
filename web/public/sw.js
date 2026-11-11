@@ -1,5 +1,6 @@
 // App shell cache. Same-origin GETs only; relay and Turso traffic is never touched.
 const CACHE = 'yiji-v1';
+const NAV_TIMEOUT_MS = 4000;
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(['./', 'manifest.webmanifest', 'icon.svg'])));
@@ -10,14 +11,15 @@ self.addEventListener('activate', (e) => {
   e.waitUntil(
     caches
       .keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+      .then((keys) => Promise.all(keys.filter((k) => k.startsWith('yiji-') && k !== CACHE).map((k) => caches.delete(k))))
       .then(() => self.clients.claim()),
   );
 });
 
 self.addEventListener('fetch', (e) => {
   const req = e.request;
-  if (req.method !== 'GET' || new URL(req.url).origin !== self.location.origin) return;
+  const url = new URL(req.url);
+  if (req.method !== 'GET' || url.origin !== self.location.origin) return;
   const store = (res) => {
     if (res.ok) {
       const copy = res.clone();
@@ -25,11 +27,26 @@ self.addEventListener('fetch', (e) => {
     }
     return res;
   };
+
   if (req.mode === 'navigate') {
-    // Network first so a new deploy is picked up; the cache serves offline starts.
-    e.respondWith(fetch(req).then(store).catch(() => caches.match('./')));
+    // Network first so a new deploy is picked up; a slow or dead network falls back to the cache.
+    const net = fetch(req).then(store);
+    const slow = new Promise((resolve) => setTimeout(resolve, NAV_TIMEOUT_MS, null));
+    e.respondWith(
+      Promise.race([net, slow])
+        .catch(() => null)
+        .then((res) => res || caches.match('./').then((hit) => hit || net)),
+    );
     return;
   }
-  // Built assets have hashed names, so cache first is safe.
-  e.respondWith(caches.match(req).then((hit) => hit || fetch(req).then(store)));
+
+  if (url.pathname.includes('/assets/')) {
+    // Hashed file names never change content, so cache first is safe.
+    e.respondWith(caches.match(req).then((hit) => hit || fetch(req).then(store)));
+    return;
+  }
+
+  const refresh = fetch(req).then(store);
+  e.waitUntil(refresh.catch(() => {}));
+  e.respondWith(caches.match(req).then((hit) => hit || refresh));
 });

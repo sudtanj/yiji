@@ -1,6 +1,6 @@
-import type { ComponentChildren, JSX } from 'preact';
+import type { ComponentChildren } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
-import { loadSettings, saveSettings } from './backends';
+import { checkSettings, clearSettings, hasStoredSettings, loadSettings, saveSettings } from './backends';
 import { type ConnConfig, type Kind, connect } from './db';
 import { Icon } from './icons';
 import { type Backend, Vault, hasVault } from './store';
@@ -20,13 +20,14 @@ export function Modal(props: {
     window.addEventListener('keydown', h);
     return () => window.removeEventListener('keydown', h);
   }, [onClose]);
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null;
+    return () => opener?.focus?.();
+  }, []);
   return (
-    <div class="overlay">
+    <div class="overlay" role="dialog" aria-modal="true" aria-label={props.title}>
       <form
         class="dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-label={props.title}
         onSubmit={(e) => {
           e.preventDefault();
           props.onSubmit?.();
@@ -77,26 +78,34 @@ export function AboutDialog({ onClose }: { onClose: () => void }) {
   );
 }
 
-export function Unlock({ backend, onUnlock }: { backend: Backend; onUnlock: (v: Vault<ConnConfig>) => void }) {
+export function Unlock(props: {
+  backend?: Backend;
+  initialError?: string;
+  onUnlock: (v: Vault<ConnConfig>) => void;
+}) {
+  const { backend } = props;
   const [first, setFirst] = useState<boolean>();
   const [pw, setPw] = useState('');
   const [pw2, setPw2] = useState('');
-  const [error, setError] = useState('');
+  const [error, setError] = useState(props.initialError ?? '');
   const [busy, setBusy] = useState(false);
+  const [settings, setSettings] = useState(false);
 
   useEffect(() => {
+    if (!backend) return;
     hasVault(backend)
       .then((has) => setFirst(!has))
       .catch((e) => setError(`Cannot reach the connection store. ${errMsg(e)}`));
   }, []);
 
   const submit = async () => {
-    if (first && pw.length < 8) return setError('Use at least 8 characters.');
+    if (!backend) return;
+    if (first && pw.length < 10) return setError('Use at least 10 characters.');
     if (first && pw !== pw2) return setError('The two passwords do not match.');
     setBusy(true);
     setError('');
     try {
-      onUnlock(await Vault.unlock<ConnConfig>(backend, pw));
+      props.onUnlock(await Vault.unlock<ConnConfig>(backend, pw));
     } catch (e) {
       setError(errMsg(e));
       setBusy(false);
@@ -104,50 +113,56 @@ export function Unlock({ backend, onUnlock }: { backend: Backend; onUnlock: (v: 
   };
 
   return (
-    <Modal
-      title={first ? 'Set master password' : 'Unlock Yiji'}
-      onSubmit={submit}
-      buttons={
-        <>
-          {error && loadSettings() && (
-            <button
-              type="button"
-              onClick={() => {
-                saveSettings(null);
-                location.reload();
-              }}
-            >
-              Use browser storage
+    <>
+      <Modal
+        title={first ? 'Set master password' : 'Unlock Yiji'}
+        onSubmit={submit}
+        buttons={
+          <>
+            <button type="button" class="left" onClick={() => setSettings(true)}>
+              Connection store...
             </button>
-          )}
-          <button type="submit" class="primary" disabled={busy || first === undefined}>
-            {busy ? 'Working...' : first ? 'Create' : 'Unlock'}
-          </button>
-        </>
-      }
-    >
-      {first && (
-        <p class="msg">
-          This password encrypts your saved connections in this browser. It is never stored or sent anywhere, and it
-          cannot be recovered.
-        </p>
-      )}
-      <label class="field">
-        <span>Master password</span>
-        <input type="password" autoFocus value={pw} onInput={(e) => setPw(e.currentTarget.value)} autocomplete="current-password" />
-      </label>
-      {first && (
+            {error && hasStoredSettings() && (
+              <button
+                type="button"
+                onClick={() => {
+                  clearSettings();
+                  location.reload();
+                }}
+              >
+                Use browser storage
+              </button>
+            )}
+            <button type="submit" class="primary" disabled={busy || first === undefined}>
+              {busy ? 'Working...' : first ? 'Create' : 'Unlock'}
+            </button>
+          </>
+        }
+      >
+        {first && (
+          <p class="msg">
+            This password encrypts your saved connections. It is never stored or sent anywhere, and it cannot be
+            recovered.
+          </p>
+        )}
         <label class="field">
-          <span>Repeat password</span>
-          <input type="password" value={pw2} onInput={(e) => setPw2(e.currentTarget.value)} autocomplete="new-password" />
+          <span>Master password</span>
+          <input type="password" autoFocus value={pw} onInput={(e) => setPw(e.currentTarget.value)} autocomplete="current-password" />
         </label>
-      )}
-      {error && (
-        <p class="msg error" role="alert">
-          {error}
-        </p>
-      )}
-    </Modal>
+        {first && (
+          <label class="field">
+            <span>Repeat password</span>
+            <input type="password" value={pw2} onInput={(e) => setPw2(e.currentTarget.value)} autocomplete="new-password" />
+          </label>
+        )}
+        {error && (
+          <p class="msg error" role="alert">
+            {error}
+          </p>
+        )}
+      </Modal>
+      {settings && <SettingsDialog onClose={() => setSettings(false)} />}
+    </>
   );
 }
 
@@ -155,14 +170,25 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const current = loadSettings();
   const [url, setUrl] = useState(current?.url ?? '');
   const [token, setToken] = useState(current?.token ?? '');
+  const [error, setError] = useState('');
+
+  const save = () => {
+    const u = url.trim();
+    if (u) {
+      const bad = checkSettings(u);
+      if (bad) return setError(bad);
+      saveSettings({ url: u, token: token.trim() });
+    } else {
+      clearSettings();
+    }
+    location.reload();
+  };
+
   return (
     <Modal
-      title="Settings"
+      title="Connection store"
       onClose={onClose}
-      onSubmit={() => {
-        saveSettings(url.trim() && token.trim() ? { url: url.trim(), token: token.trim() } : null);
-        location.reload();
-      }}
+      onSubmit={save}
       buttons={
         <>
           <button type="submit" class="primary">
@@ -175,10 +201,10 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
       }
     >
       <p class="msg">
-        Connection store. With a Turso (libSQL) URL and token, saved connections go to your Turso database, encrypted
-        with your master password. Leave both empty to use this browser. The URL and token are kept in this browser
-        in plain text. Saving restarts Yiji and asks for the master password of the new store; connections are not
-        copied between stores.
+        With a Turso (libSQL) URL, saved connections go to your Turso database, encrypted with your master password.
+        Leave the URL empty to use this browser. The token may be empty for a server without auth. The URL and token
+        are kept in this browser in plain text. Saving restarts Yiji and asks for the master password of the new
+        store; connections are not copied between stores.
       </p>
       <label class="field">
         <span>Turso URL</span>
@@ -188,6 +214,11 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
         <span>Auth token</span>
         <input type="password" value={token} onInput={(e) => setToken(e.currentTarget.value)} autocomplete="off" />
       </label>
+      {error && (
+        <p class="msg error" role="alert">
+          {error}
+        </p>
+      )}
     </Modal>
   );
 }
@@ -206,6 +237,7 @@ const blank = (kind: Kind): ConnConfig => ({
   host: 'localhost',
   port: kind === 'mongo' ? 27017 : 5432,
   database: '',
+  mongoDb: '',
   user: '',
   password: '',
   relayUrl: '',
@@ -215,7 +247,7 @@ const blank = (kind: Kind): ConnConfig => ({
   authToken: '',
 });
 
-type TextKey = 'name' | 'host' | 'database' | 'user' | 'password' | 'relayUrl' | 'relayToken' | 'url' | 'authToken';
+type TextKey = 'name' | 'host' | 'database' | 'mongoDb' | 'user' | 'password' | 'relayUrl' | 'relayToken' | 'url' | 'authToken';
 
 function invalid(c: ConnConfig): string | null {
   if (c.kind === 'sqlite') return c.sqliteMode === 'remote' && !c.url.trim() ? 'URL is required.' : null;
@@ -238,7 +270,7 @@ export function ConnDialog(props: {
   const text = (k: TextKey, type = 'text') => ({
     type,
     value: cfg[k],
-    onInput: (e: JSX.TargetedEvent<HTMLInputElement>) => setCfg((c) => ({ ...c, [k]: e.currentTarget.value })),
+    onInput: (e: Event) => setCfg((c) => ({ ...c, [k]: (e.currentTarget as HTMLInputElement).value })),
   });
   const pickKind = (kind: Kind) => setCfg(() => blank(kind));
 
@@ -369,9 +401,15 @@ export function ConnDialog(props: {
                 />
               </label>
               <label class="field">
-                <span>Database</span>
+                <span>{cfg.kind === 'mongo' ? 'Auth database' : 'Database'}</span>
                 <input {...text('database')} />
               </label>
+              {cfg.kind === 'mongo' && (
+                <label class="field">
+                  <span>Database</span>
+                  <input {...text('mongoDb')} placeholder="Default: auth database" />
+                </label>
+              )}
               <label class="field">
                 <span>Username</span>
                 <input {...text('user')} autocomplete="off" />

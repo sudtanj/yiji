@@ -1,5 +1,8 @@
 name: web
 
+permissions:
+  contents: read
+
 on:
   push:
     paths: ['web/**', 'wasm/**', '.github/workflows/web.yml']
