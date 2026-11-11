@@ -7,11 +7,13 @@ test('loads, asks for the relay, rejects an insecure URL and registers the servi
   page.on('pageerror', (e) => problems.push(e.message));
 
   await page.goto('./');
-  await expect(page.getByRole('dialog', { name: 'Connect to relay' })).toBeVisible();
-  await page.getByLabel('Relay URL').fill('http://relay.example/');
-  await page.getByLabel('Password', { exact: true }).fill('smoke-test-password');
-  await page.getByRole('button', { name: 'Connect' }).click();
-  await expect(page.getByRole('alert')).toContainText('must start with wss://');
+  // The app renders (inert) behind the popup, so scope lookups to the dialog.
+  const login = page.getByRole('dialog', { name: 'Connect to relay' });
+  await expect(login).toBeVisible();
+  await login.getByLabel('Relay URL').fill('http://relay.example/');
+  await login.getByLabel('Password', { exact: true }).fill('smoke-test-password');
+  await login.getByRole('button', { name: 'Connect' }).click();
+  await expect(login.getByRole('alert')).toContainText('must start with wss://');
   expect(await page.evaluate(() => localStorage.getItem('yiji.relay'))).toBeNull();
 
   const scope = await page.evaluate(() => navigator.serviceWorker.ready.then((r) => r.scope));
