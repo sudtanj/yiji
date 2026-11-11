@@ -74,7 +74,8 @@ impl MongoConn {
     #[wasm_bindgen(js_name = runCommand)]
     pub async fn run_command(&self, db: String, cmd_json: String) -> Result<String, String> {
         let conn = self.conn.borrow().clone().ok_or("connection closed")?;
-        conn.lock().await.run_json(&db, &cmd_json).await
+        let mut session = conn.lock().await;
+        session.run_json(&db, &cmd_json).await
     }
 
     pub fn close(&self) {
