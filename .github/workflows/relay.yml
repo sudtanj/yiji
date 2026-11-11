@@ -67,3 +67,23 @@ jobs:
         run: |
           echo '### relay bench' >> "$GITHUB_STEP_SUMMARY"
           grep 'bench: ' bench.txt | sed 's/.*bench: /- /' >> "$GITHUB_STEP_SUMMARY"
+
+  integration:
+    needs: check
+    runs-on: ubuntu-latest
+    services:
+      sqld:
+        image: ghcr.io/tursodatabase/libsql-server:latest
+        ports: ['8080:8080']
+    env:
+      YIJI_LIBSQL_URL: http://127.0.0.1:8080
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: relay
+      - name: Wait for sqld
+        run: curl -sS -o /dev/null --retry 30 --retry-delay 1 --retry-connrefused "$YIJI_LIBSQL_URL/health"
+      - name: Vault over relay against libSQL
+        run: test -n "$YIJI_LIBSQL_URL" && cargo test --test vault -- --ignored --nocapture

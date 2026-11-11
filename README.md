@@ -13,7 +13,7 @@ Browsers cannot open TCP connections, so PostgreSQL and MongoDB traffic goes thr
 
 The hosted app only connects to `https://` and `wss://` addresses, so put the relay behind TLS (Cloudflare Tunnel, Tailscale or a reverse proxy).
 
-Saved connections are encrypted in the browser with your master password, then stored in a Turso database you own (or in the browser if you have none).
+Saved connections are encrypted in the browser with your password, then stored in your Turso database through the relay. Run the relay with `YIJI_TURSO_URL` and `YIJI_TURSO_TOKEN` set, then enter the relay URL and its `YIJI_TOKEN` in the app on first launch. They are kept on that device until you use File > Log out.
 
 ## Layout
 

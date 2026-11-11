@@ -1,23 +1,33 @@
 import { render } from 'preact';
-import { useMemo, useState } from 'preact/hooks';
+import { useEffect, useState } from 'preact/hooks';
 import { App } from './app';
-import { loadSettings, makeBackend } from './backends';
+import { loadSettings, openVault } from './backends';
 import type { ConnConfig } from './db';
-import { Unlock } from './dialogs';
+import { Login } from './dialogs';
 import type { Vault } from './store';
 import { errMsg } from './util';
 import './styles.css';
 
 function Root() {
+  const [saved] = useState(loadSettings);
   const [vault, setVault] = useState<Vault<ConnConfig> | null>(null);
-  const store = useMemo(() => {
-    try {
-      return { backend: makeBackend(loadSettings()), error: '' };
-    } catch (e) {
-      return { backend: undefined, error: `The connection store settings are invalid. ${errMsg(e)}` };
-    }
+  const [connecting, setConnecting] = useState(saved !== null);
+  const [error, setError] = useState('');
+
+  // A failed silent login keeps the saved settings: the relay may just be down.
+  useEffect(() => {
+    if (!saved) return;
+    openVault(saved)
+      .then(setVault)
+      .catch((e) => {
+        setError(errMsg(e));
+        setConnecting(false);
+      });
   }, []);
-  return vault ? <App vault={vault} /> : <Unlock backend={store.backend} initialError={store.error} onUnlock={setVault} />;
+
+  if (vault) return <App vault={vault} />;
+  if (connecting) return <p class="msg" role="status">Connecting to relay...</p>;
+  return <Login initialUrl={saved?.url ?? ''} initialError={error} onUnlock={setVault} />;
 }
 
 render(<Root />, document.getElementById('app')!);

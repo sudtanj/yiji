@@ -31,7 +31,8 @@ fn from_env() -> Result<(Config, String), String> {
         text("YIJI_ALLOW")?,
         text("YIJI_ORIGINS")?,
     );
-    let mut config = Config::new(&token, &allow, &origins)?;
+    let (turso_url, turso_token) = (text("YIJI_TURSO_URL")?, text("YIJI_TURSO_TOKEN")?);
+    let mut config = Config::with_vault(&token, &allow, &origins, &turso_url, &turso_token)?;
     if let Some(n) = positive("YIJI_MAX_CONN")? {
         config.max_conn = n;
     }

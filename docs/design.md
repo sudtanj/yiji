@@ -49,13 +49,26 @@ flowchart LR
 4. After `ok`, every frame in both directions is binary and carries raw database protocol bytes. The relay copies bytes and nothing else. A text frame after `ok` closes the connection with code 1008 and reason `binary only`. Messages over 16 MiB also close it.
 5. Either side closing ends both the WebSocket and the TCP connection.
 
+Vault mode (only when the relay has `YIJI_TURSO_URL`): the first frame is `{"token":"<relay token>","vault":true}` with no `host` or `port`. The token check and Origin check are the same. Without Turso configured the relay closes with `vault not configured`. After `ok`, each client text frame (at most 1 MiB) is one request and gets exactly one text reply, in order:
+
+| Request | Reply |
+|---------|-------|
+| `{"op":"list"}` | `{"rows":[{"id":"..","data":"..","updated_at":123}]}` |
+| `{"op":"put","row":{...}}` | `{}` (upsert by `id`) |
+| `{"op":"create","row":{...}}` | `{}` (does nothing if `id` exists) |
+| `{"op":"remove","id":".."}` | `{}` |
+
+Any failure in a text request (bad JSON, unknown op, Turso error or 15 s timeout) answers `{"error":"<short message>"}` and keeps the socket open. A binary or oversized (over 1 MiB) frame closes the socket. The relay talks to Turso over its HTTP pipeline API with fixed SQL and bound arguments, never SQL from the client.
+
 Relay config, all from environment variables:
 
 | Variable | Example | Meaning |
 |----------|---------|---------|
 | `YIJI_LISTEN` | `127.0.0.1:8080` | Address to listen on. TLS is terminated in front (Cloudflare Tunnel, Tailscale, reverse proxy). |
 | `YIJI_TOKEN` | 32+ random chars | Shared secret. Relay refuses to start without it. |
-| `YIJI_ALLOW` | `db.lan:5432,10.0.0.5:27017` | Comma-separated `host:port` targets. Exact match. Refuses to start if empty. |
+| `YIJI_ALLOW` | `db.lan:5432,10.0.0.5:27017` | Comma-separated `host:port` targets. Exact match. Refuses to start if empty, unless `YIJI_TURSO_URL` is set. |
+| `YIJI_TURSO_URL` | `libsql://db.turso.io` | Optional. Turso or sqld URL (`https://` or `libsql://`). Enables vault mode. |
+| `YIJI_TURSO_TOKEN` | Turso auth token | Optional. May be empty for an sqld without auth. |
 | `YIJI_ORIGINS` | `https://sudtanj.github.io` | Comma-separated allowed `Origin` values. Required: refuses to start if empty. `*` allows any origin. |
 | `YIJI_MAX_CONN` | `64` | Optional. Maximum simultaneous connections; default 64. |
 | `YIJI_MAX_PENDING` | `16` | Optional. Maximum connections that have not yet passed the token and allowlist checks; default 16. |

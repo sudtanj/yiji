@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { AboutDialog, ConnDialog, MessageDialog, SettingsDialog } from './dialogs';
+import { clearSettings } from './backends';
+import { AboutDialog, ConnDialog, MessageDialog } from './dialogs';
 import { type ConnConfig, type Session, type Target, connect } from './db';
 import { EXECUTE_EVENT, SqlTab, TableTab } from './editor';
 import { Icon, type IconId } from './icons';
@@ -17,7 +18,6 @@ interface Tab {
 type Dialog =
   | null
   | { type: 'conn'; initial?: ConnConfig }
-  | { type: 'settings' }
   | { type: 'about' }
   | { type: 'message'; title: string; text: string };
 
@@ -229,11 +229,12 @@ export function App({ vault }: { vault: Vault<ConnConfig> }) {
       { label: 'New Database Connection...', run: newConn },
       { label: 'New SQL script', hint: 'Ctrl+]', run: () => newScript() },
       { label: 'Save SQLite file', run: () => live?.save?.(), disabled: !live?.save },
-      { label: 'Settings...', run: () => setDialog({ type: 'settings' }) },
       {
-        label: 'Lock',
+        label: 'Log out',
         run: () => {
           if (Object.keys(sessions).some(keepChanges)) return;
+          if (!confirm('Log out? This forgets the relay URL and password on this device.')) return;
+          clearSettings();
           leaving.current = true;
           location.reload();
         },
@@ -366,7 +367,6 @@ export function App({ vault }: { vault: Vault<ConnConfig> }) {
         </div>
       )}
       {dialog?.type === 'conn' && <ConnDialog initial={dialog.initial} onSave={saveConn} onClose={() => setDialog(null)} />}
-      {dialog?.type === 'settings' && <SettingsDialog onClose={() => setDialog(null)} />}
       {dialog?.type === 'about' && <AboutDialog onClose={() => setDialog(null)} />}
       {dialog?.type === 'message' && <MessageDialog title={dialog.title} text={dialog.text} onClose={() => setDialog(null)} />}
     </div>

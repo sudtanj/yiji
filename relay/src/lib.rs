@@ -1,3 +1,5 @@
+mod vault;
+
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -9,13 +11,14 @@ use subtle::ConstantTimeEq;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
-use tokio::time::{sleep, timeout, Instant};
+use tokio::time::{sleep, timeout, timeout_at, Instant};
 use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
 use tokio_tungstenite::tungstenite::http::StatusCode;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::protocol::{CloseFrame, Role, WebSocketConfig};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{accept_hdr_async_with_config, WebSocketStream};
+use vault::Vault;
 
 const MIN_TOKEN_LEN: usize = 32;
 const STEP_TIMEOUT: Duration = Duration::from_secs(5);
@@ -23,6 +26,7 @@ const READ_BUF: usize = 16 * 1024;
 const DEFAULT_MAX_CONN: usize = 64;
 const DEFAULT_MAX_PENDING: usize = 16;
 const HELLO_LIMIT: usize = 4 * 1024;
+const VAULT_MAX_REQUEST: usize = 1024 * 1024;
 const DEFAULT_IDLE: Duration = Duration::from_secs(30 * 60);
 // ponytail: 16 MiB per message/frame. Mongo allows 48 MB messages but drivers chunk below that.
 const MAX_MESSAGE: usize = 16 * 1024 * 1024;
@@ -32,11 +36,13 @@ const NOT_ALLOWED: &str = "target not allowed";
 const CONNECT_FAILED: &str = "connect failed";
 const BAD_HELLO: &str = "bad hello";
 const BINARY_ONLY: &str = "binary only";
+const NO_VAULT: &str = "vault not configured";
 
 pub struct Config {
     token: String,
     allow: HashSet<String>,
     origins: HashSet<String>,
+    vault: Option<Vault>,
     /// Connections served at once; further clients wait in the accept backlog.
     pub max_conn: usize,
     /// Connections that have not yet passed the token and allowlist checks.
@@ -48,13 +54,30 @@ pub struct Config {
 impl Config {
     /// `allow` and `origins` are comma-separated. `origins` must be set; `*` accepts any Origin.
     pub fn new(token: &str, allow: &str, origins: &str) -> Result<Self, &'static str> {
+        Self::with_vault(token, allow, origins, "", "")
+    }
+
+    /// Like `new`, plus the Turso vault when `turso_url` is not empty. Then `allow` may be empty.
+    pub fn with_vault(
+        token: &str,
+        allow: &str,
+        origins: &str,
+        turso_url: &str,
+        turso_token: &str,
+    ) -> Result<Self, &'static str> {
         if token.chars().count() < MIN_TOKEN_LEN {
             return Err("YIJI_TOKEN must be at least 32 characters");
         }
         let allow = split_list(allow);
-        if allow.is_empty() {
-            return Err("YIJI_ALLOW must list at least one host:port");
+        let turso_url = turso_url.trim();
+        if allow.is_empty() && turso_url.is_empty() {
+            return Err("YIJI_ALLOW must list at least one host:port, or set YIJI_TURSO_URL");
         }
+        let vault = if turso_url.is_empty() {
+            None
+        } else {
+            Some(Vault::new(turso_url, turso_token)?)
+        };
         let origins = split_list(origins);
         if origins.is_empty() {
             return Err("YIJI_ORIGINS must be set; use * to allow any origin");
@@ -63,6 +86,7 @@ impl Config {
             token: token.to_owned(),
             allow,
             origins,
+            vault,
             max_conn: DEFAULT_MAX_CONN,
             max_pending: DEFAULT_MAX_PENDING,
             idle: DEFAULT_IDLE,
@@ -78,6 +102,14 @@ impl Config {
     fn allows(&self, host: &str, port: u16) -> bool {
         self.allow.contains(&format!("{host}:{port}"))
     }
+
+    fn admits(&self, target: &Target) -> Result<(), &'static str> {
+        match target {
+            Target::Tcp { host, port } if !self.allows(host, *port) => Err(NOT_ALLOWED),
+            Target::Vault if self.vault.is_none() => Err(NO_VAULT),
+            _ => Ok(()),
+        }
+    }
 }
 
 fn split_list(list: &str) -> HashSet<String> {
@@ -89,14 +121,35 @@ fn split_list(list: &str) -> HashSet<String> {
 }
 
 #[derive(Deserialize)]
+struct RawHello {
+    token: String,
+    #[serde(default)]
+    vault: bool,
+    host: Option<String>,
+    port: Option<u16>,
+}
+
+enum Target {
+    Tcp { host: String, port: u16 },
+    Vault,
+}
+
 struct Hello {
     token: String,
-    host: String,
-    port: u16,
+    target: Target,
 }
 
 fn parse_hello(text: &str) -> Result<Hello, &'static str> {
-    serde_json::from_str(text).map_err(|_| BAD_HELLO)
+    let raw: RawHello = serde_json::from_str(text).map_err(|_| BAD_HELLO)?;
+    let target = match (raw.vault, raw.host, raw.port) {
+        (true, _, _) => Target::Vault,
+        (false, Some(host), Some(port)) => Target::Tcp { host, port },
+        _ => return Err(BAD_HELLO),
+    };
+    Ok(Hello {
+        token: raw.token,
+        target,
+    })
 }
 
 pub async fn serve(listener: TcpListener, config: Config) {
@@ -169,25 +222,40 @@ async fn connection(
         Ok(Some(Ok(Message::Text(text)))) => parse_hello(&text),
         _ => Err(BAD_HELLO),
     };
-    let hello = match hello {
-        Ok(hello) if !config.token_matches(&hello.token) => Err(BAD_TOKEN),
-        Ok(hello) if !config.allows(&hello.host, hello.port) => Err(NOT_ALLOWED),
-        other => other,
-    };
+    let hello = hello.and_then(|hello| {
+        if !config.token_matches(&hello.token) {
+            return Err(BAD_TOKEN);
+        }
+        config.admits(&hello.target)?;
+        Ok(hello)
+    });
     let hello = match hello {
         Ok(hello) => hello,
         Err(reason) => return Err(reject(&mut ws, reason).await),
     };
     drop(pending);
+    let max_message = match hello.target {
+        Target::Vault => VAULT_MAX_REQUEST,
+        Target::Tcp { .. } => MAX_MESSAGE,
+    };
     // WebSocketStream has no set_config, so rebuild it with the large limits. Bytes tungstenite
     // read ahead are lost, so clients must wait for `ok` before sending data.
     let relay_limits = WebSocketConfig::default()
-        .max_message_size(Some(MAX_MESSAGE))
-        .max_frame_size(Some(MAX_MESSAGE));
+        .max_message_size(Some(max_message))
+        .max_frame_size(Some(max_message));
     let mut ws =
         WebSocketStream::from_raw_socket(ws.into_inner(), Role::Server, Some(relay_limits)).await;
 
-    let target = (hello.host.as_str(), hello.port);
+    let (host, port) = match hello.target {
+        Target::Tcp { host, port } => (host, port),
+        Target::Vault => {
+            let Some(vault) = &config.vault else {
+                return Err(reject(&mut ws, NO_VAULT).await);
+            };
+            return serve_vault(ws, vault, peer, config.idle).await;
+        }
+    };
+    let target = (host.as_str(), port);
     let mut tcp = match timeout(STEP_TIMEOUT, TcpStream::connect(target)).await {
         Ok(Ok(tcp)) => tcp,
         _ => return Err(reject(&mut ws, CONNECT_FAILED).await),
@@ -196,7 +264,7 @@ async fn connection(
     if ws.send(Message::text("ok")).await.is_err() {
         return Ok(());
     }
-    eprintln!("{peer} open -> {}:{}", hello.host, hello.port);
+    eprintln!("{peer} open -> {host}:{port}");
 
     let mut buf = [0u8; READ_BUF];
     let mut refusal = None;
@@ -244,6 +312,35 @@ async fn connection(
     Ok(())
 }
 
+/// One text request in, one text reply out, until the client leaves or sits idle.
+async fn serve_vault(
+    mut ws: WebSocketStream<TcpStream>,
+    vault: &Vault,
+    peer: SocketAddr,
+    idle: Duration,
+) -> Result<(), &'static str> {
+    if ws.send(Message::text("ok")).await.is_err() {
+        return Ok(());
+    }
+    eprintln!("{peer} open -> vault");
+    let mut deadline = Instant::now() + idle;
+    loop {
+        match timeout_at(deadline, ws.next()).await {
+            Ok(Some(Ok(Message::Text(request)))) => {
+                deadline = Instant::now() + idle;
+                let reply = vault.handle(&request).await;
+                if ws.send(Message::text(reply)).await.is_err() {
+                    return Ok(());
+                }
+            }
+            Ok(Some(Ok(Message::Ping(_) | Message::Pong(_)))) => {}
+            _ => break,
+        }
+    }
+    let _ = timeout(STEP_TIMEOUT, ws.close(None)).await;
+    Ok(())
+}
+
 async fn reject(ws: &mut WebSocketStream<TcpStream>, reason: &'static str) -> &'static str {
     let frame = CloseFrame {
         code: CloseCode::Policy,
@@ -262,10 +359,17 @@ mod tests {
     #[test]
     fn hello_parses() {
         let hello = parse_hello(r#"{"token":"t","host":"db.lan","port":5432}"#).unwrap();
-        assert_eq!(
-            (hello.token.as_str(), hello.host.as_str(), hello.port),
-            ("t", "db.lan", 5432)
-        );
+        assert_eq!(hello.token, "t");
+        assert!(matches!(
+            hello.target,
+            Target::Tcp { ref host, port: 5432 } if host == "db.lan"
+        ));
+    }
+
+    #[test]
+    fn vault_hello_parses() {
+        let hello = parse_hello(r#"{"token":"t","vault":true}"#).unwrap();
+        assert!(matches!(hello.target, Target::Vault));
     }
 
     #[test]
@@ -297,6 +401,35 @@ mod tests {
         assert!(!config.allows("db.lan", 5433));
         assert!(!config.allows("DB.lan", 5432));
         assert!(!config.allows("db.lan:5432", 5432));
+    }
+
+    #[test]
+    fn hello_without_target_is_malformed() {
+        for text in [r#"{"token":"t"}"#, r#"{"token":"t","vault":false}"#] {
+            assert_eq!(parse_hello(text).err(), Some(BAD_HELLO), "{text}");
+        }
+    }
+
+    #[test]
+    fn vault_only_config() {
+        let url = "libsql://db.turso.io";
+        assert!(Config::with_vault(TOKEN, "", "*", url, "").is_ok());
+        assert!(Config::with_vault(TOKEN, "", "*", "", "").is_err());
+        assert!(Config::with_vault(TOKEN, "a:1", "*", "", "").is_ok());
+        assert!(Config::with_vault(TOKEN, "", "*", "ftp://x", "").is_err());
+    }
+
+    #[test]
+    fn vault_hello_needs_vault() {
+        let plain = Config::new(TOKEN, "a:1", "*").unwrap();
+        assert_eq!(plain.admits(&Target::Vault), Err(NO_VAULT));
+        let vault = Config::with_vault(TOKEN, "", "*", "https://db.turso.io", "").unwrap();
+        assert_eq!(vault.admits(&Target::Vault), Ok(()));
+        let tcp = Target::Tcp {
+            host: "a".into(),
+            port: 1,
+        };
+        assert_eq!(vault.admits(&tcp), Err(NOT_ALLOWED));
     }
 
     #[test]

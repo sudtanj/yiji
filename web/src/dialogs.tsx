@@ -1,9 +1,9 @@
 import type { ComponentChildren } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
-import { checkSettings, clearSettings, hasStoredSettings, loadSettings, saveSettings } from './backends';
+import { checkRelayUrl, loadSettings, openVault, saveSettings } from './backends';
 import { type ConnConfig, type Kind, connect } from './db';
 import { Icon } from './icons';
-import { type Backend, Vault, hasVault } from './store';
+import type { Vault } from './store';
 import { errMsg } from './util';
 
 export function Modal(props: {
@@ -77,34 +77,23 @@ export function AboutDialog({ onClose }: { onClose: () => void }) {
   );
 }
 
-export function Unlock(props: {
-  backend?: Backend;
-  initialError?: string;
-  onUnlock: (v: Vault<ConnConfig>) => void;
-}) {
-  const { backend } = props;
-  const [first, setFirst] = useState<boolean>();
+export function Login(props: { initialUrl: string; initialError: string; onUnlock: (v: Vault<ConnConfig>) => void }) {
+  const [url, setUrl] = useState(props.initialUrl);
   const [pw, setPw] = useState('');
-  const [pw2, setPw2] = useState('');
-  const [error, setError] = useState(props.initialError ?? '');
+  const [error, setError] = useState(props.initialError);
   const [busy, setBusy] = useState(false);
-  const [settings, setSettings] = useState(false);
-
-  useEffect(() => {
-    if (!backend) return;
-    hasVault(backend)
-      .then((has) => setFirst(!has))
-      .catch((e) => setError(`Cannot reach the connection store. ${errMsg(e)}`));
-  }, []);
 
   const submit = async () => {
-    if (!backend) return;
-    if (first && pw.length < 10) return setError('Use at least 10 characters.');
-    if (first && pw !== pw2) return setError('The two passwords do not match.');
+    const u = url.trim();
+    const bad = checkRelayUrl(u) ?? (pw ? null : 'Enter the relay password.');
+    if (bad) return setError(bad);
     setBusy(true);
     setError('');
     try {
-      props.onUnlock(await Vault.unlock<ConnConfig>(backend, pw));
+      const settings = { url: u, password: pw };
+      const vault = await openVault(settings);
+      saveSettings(settings);
+      props.onUnlock(vault);
     } catch (e) {
       setError(errMsg(e));
       setBusy(false);
@@ -112,106 +101,38 @@ export function Unlock(props: {
   };
 
   return (
-    <>
-      <Modal
-        title={first ? 'Set master password' : 'Unlock Yiji'}
-        onSubmit={submit}
-        buttons={
-          <>
-            <button type="button" class="left" onClick={() => setSettings(true)}>
-              Connection store...
-            </button>
-            {error && hasStoredSettings() && (
-              <button
-                type="button"
-                onClick={() => {
-                  clearSettings();
-                  location.reload();
-                }}
-              >
-                Use browser storage
-              </button>
-            )}
-            <button type="submit" class="primary" disabled={busy || first === undefined}>
-              {busy ? 'Working...' : first ? 'Create' : 'Unlock'}
-            </button>
-          </>
-        }
-      >
-        {first && (
-          <p class="msg">
-            This password encrypts your saved connections. It is never stored or sent anywhere, and it cannot be
-            recovered.
-          </p>
-        )}
-        <label class="field">
-          <span>Master password</span>
-          <input type="password" autoFocus value={pw} onInput={(e) => setPw(e.currentTarget.value)} autocomplete="current-password" />
-        </label>
-        {first && (
-          <label class="field">
-            <span>Repeat password</span>
-            <input type="password" value={pw2} onInput={(e) => setPw2(e.currentTarget.value)} autocomplete="new-password" />
-          </label>
-        )}
-        {error && (
-          <p class="msg error" role="alert">
-            {error}
-          </p>
-        )}
-      </Modal>
-      {settings && <SettingsDialog onClose={() => setSettings(false)} />}
-    </>
-  );
-}
-
-export function SettingsDialog({ onClose }: { onClose: () => void }) {
-  const current = loadSettings();
-  const [url, setUrl] = useState(current?.url ?? '');
-  const [token, setToken] = useState(current?.token ?? '');
-  const [error, setError] = useState('');
-
-  const save = () => {
-    const u = url.trim();
-    if (u) {
-      const bad = checkSettings(u);
-      if (bad) return setError(bad);
-      saveSettings({ url: u, token: token.trim() });
-    } else {
-      clearSettings();
-    }
-    location.reload();
-  };
-
-  return (
     <Modal
-      title="Connection store"
-      onClose={onClose}
-      onSubmit={save}
+      title="Connect to relay"
+      onSubmit={submit}
       buttons={
-        <>
-          <button type="submit" class="primary">
-            Save and restart
-          </button>
-          <button type="button" onClick={onClose}>
-            Cancel
-          </button>
-        </>
+        <button type="submit" class="primary" disabled={busy}>
+          {busy ? 'Connecting...' : 'Connect'}
+        </button>
       }
     >
       <p class="msg">
-        With a Turso (libSQL) URL, saved connections go to your Turso database, encrypted with your master password.
-        Leave the URL empty to use this browser. The token may be empty for a server without auth. The URL and token
-        are kept in this browser in plain text. Saving restarts Yiji and asks for the master password of the new
-        store; connections are not copied between stores.
+        Your saved connections are stored through the relay, encrypted with this password. The same password is the
+        relay token. The URL and password stay on this device until you log out.
       </p>
       <label class="field">
-        <span>Turso URL</span>
-        <input value={url} placeholder="libsql://name-org.turso.io" onInput={(e) => setUrl(e.currentTarget.value)} />
+        <span>Relay URL</span>
+        <input
+          autoFocus={!url}
+          value={url}
+          placeholder="wss://relay.example/"
+          onInput={(e) => setUrl(e.currentTarget.value)}
+          autocomplete="url"
+        />
       </label>
       <label class="field">
-        <span>Auth token</span>
-        <input type="password" value={token} onInput={(e) => setToken(e.currentTarget.value)} autocomplete="off" />
+        <span>Password</span>
+        <input
+          type="password"
+          autoFocus={!!url}
+          value={pw}
+          onInput={(e) => setPw(e.currentTarget.value)}
+          autocomplete="current-password"
+        />
       </label>
       {error && (
         <p class="msg error" role="alert">
@@ -229,7 +150,7 @@ const TYPES: { kind: Kind; label: string }[] = [
 ];
 const ICON = { postgres: 'pg', mongo: 'mongo', sqlite: 'sqlite' } as const;
 
-const blank = (kind: Kind): ConnConfig => ({
+const blank = (kind: Kind, saved = loadSettings()): ConnConfig => ({
   id: crypto.randomUUID(),
   name: '',
   kind,
@@ -239,8 +160,8 @@ const blank = (kind: Kind): ConnConfig => ({
   mongoDb: '',
   user: '',
   password: '',
-  relayUrl: '',
-  relayToken: '',
+  relayUrl: saved?.url ?? '',
+  relayToken: saved?.password ?? '',
   sqliteMode: 'file',
   url: '',
   authToken: '',
@@ -252,7 +173,14 @@ function invalid(c: ConnConfig): string | null {
   if (c.kind === 'sqlite') return c.sqliteMode === 'remote' && !c.url.trim() ? 'URL is required.' : null;
   if (!c.host.trim()) return 'Host is required.';
   if (!(c.port >= 1 && c.port <= 65535)) return 'Port must be between 1 and 65535.';
-  if (!c.relayUrl.trim()) return 'Relay URL is required.';
+  const relayUrl = c.relayUrl.trim();
+  if (!relayUrl) return 'Relay URL is required.';
+  const badUrl = checkRelayUrl(relayUrl);
+  if (badUrl) return badUrl;
+  const saved = loadSettings();
+  if (saved && c.relayToken === saved.password && relayUrl !== saved.url) {
+    return 'This token is your login password. Send it only to your own relay, or enter that relay’s token.';
+  }
   return null;
 }
 

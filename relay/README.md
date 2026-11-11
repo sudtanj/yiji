@@ -16,7 +16,9 @@ cargo run --release
 | Variable | Meaning |
 |----------|---------|
 | `YIJI_TOKEN` | Shared secret, at least 32 characters. The relay exits at startup if it is shorter. |
-| `YIJI_ALLOW` | Comma-separated `host:port` targets, matched exactly. The relay exits at startup if it is empty. |
+| `YIJI_ALLOW` | Comma-separated `host:port` targets, matched exactly. The relay exits at startup if it is empty, unless `YIJI_TURSO_URL` is set. |
+| `YIJI_TURSO_URL` | Optional. Turso or sqld URL (`https://` or `libsql://`). Turns on vault mode: the relay stores the web app's encrypted connection list there. |
+| `YIJI_TURSO_TOKEN` | Optional. Turso auth token. May be empty for an sqld without auth. Stays on the relay. |
 | `YIJI_LISTEN` | Listen address. Defaults to `127.0.0.1:8080`. |
 | `YIJI_ORIGINS` | Comma-separated allowed `Origin` values. Required: the relay exits at startup if it is empty. `*` accepts any origin. |
 | `YIJI_MAX_CONN` | Maximum simultaneous connections. Defaults to 64. |
@@ -28,6 +30,8 @@ Save the token somewhere safe: you enter the same value in the yiji connection f
 Prefer IP literals in `YIJI_ALLOW`. The relay resolves allowlisted hostnames through the DNS of the machine it runs on, so a hostname means trusting that DNS.
 
 A client must wait for `ok` before sending data. Bytes sent earlier are discarded.
+
+With `YIJI_TURSO_URL` set, the same WebSocket also serves the connection list (the vault), so the browser needs only the relay URL and token. The relay creates the `connections` table on first use and runs fixed statements only; it stores only encrypted rows. The relay token is also the vault master password, so whoever controls the relay host or the browser profile can decrypt the saved connections. A relay with an empty `YIJI_ALLOW` is vault-only.
 
 The relay logs one line per connection open and close to stderr: peer address and target, never the token or payload. Refused connections log the reason.
 

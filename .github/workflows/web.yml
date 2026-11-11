@@ -62,30 +62,6 @@ jobs:
           path: web/dist
           retention-days: 1
 
-  integration:
-    needs: pkg
-    runs-on: ubuntu-latest
-    services:
-      sqld:
-        image: ghcr.io/tursodatabase/libsql-server:latest
-        ports: ['8080:8080']
-    env:
-      YIJI_LIBSQL_URL: http://127.0.0.1:8080
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: wasm-pkg
-          path: wasm/pkg
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - run: npm install
-      - name: Wait for sqld
-        run: curl -sS -o /dev/null --retry 30 --retry-delay 1 --retry-connrefused "$YIJI_LIBSQL_URL/health"
-      - name: libSQL integration test
-        run: test -n "$YIJI_LIBSQL_URL" && npx vitest run src/turso.integration.test.ts
-
   smoke:
     needs: [pkg, build]
     runs-on: ubuntu-latest

@@ -1,92 +1,84 @@
-import { createClient } from '@libsql/client/web';
-import type { Backend, Row } from './store';
-import { retryable, withTimeout } from './util';
+import type { ConnConfig } from './db';
+import { type Backend, type Row, Vault } from './store';
+import { withTimeout } from './util';
 
-export interface TursoSettings {
+export interface RelaySettings {
   url: string;
-  token: string;
+  password: string;
 }
 
-const SETTINGS_KEY = 'yiji.turso';
-const LOCAL_KEY = 'yiji.connections';
-const TURSO_TIMEOUT = 15_000;
+const SETTINGS_KEY = 'yiji.relay';
+// Above the relay worst case: lazy CREATE TABLE plus the statement, 15 s each.
+const RELAY_TIMEOUT = 35_000;
 
-// ponytail: the Turso URL and token sit in localStorage in clear text because they are needed
-// before the master password can be checked (the salt itself lives in Turso). The connection
-// records stay encrypted; the token only grants access to those ciphertexts.
+// ponytail: the relay URL and password sit in localStorage in clear text because the user chose to
+// stay logged in on this device. The password also derives the vault key, so anyone who can read
+// this browser profile can read the saved connections.
 // ponytail: unreadable stored settings count as "none" so the app can still start.
-export function loadSettings(): TursoSettings | null {
+export function loadSettings(): RelaySettings | null {
   try {
-    return JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? 'null');
+    const s = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? 'null');
+    return typeof s?.url === 'string' && typeof s?.password === 'string' ? s : null;
   } catch {
     return null;
   }
 }
 
-export const hasStoredSettings = () => localStorage.getItem(SETTINGS_KEY) !== null;
+export const saveSettings = (s: RelaySettings) => localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
 
-export function clearSettings() {
-  localStorage.removeItem(SETTINGS_KEY);
+// Also drops keys left by the old in-browser Turso mode.
+export const clearSettings = () =>
+  [SETTINGS_KEY, 'yiji.turso', 'yiji.connections'].forEach((k) => localStorage.removeItem(k));
+
+/** Returns an error message, or null when `url` is an acceptable relay address. */
+export function checkRelayUrl(url: string): string | null {
+  const message = 'The relay URL must start with wss:// (ws:// only for localhost).';
+  try {
+    const u = new URL(url);
+    if (u.protocol === 'wss:') return null;
+    return u.protocol === 'ws:' && (u.hostname === 'localhost' || u.hostname === '127.0.0.1') ? null : message;
+  } catch {
+    return message;
+  }
 }
 
-/** Returns an error message, or null when `url` can be saved. The token may be empty (sqld without auth). */
-export function checkSettings(url: string): string | null {
-  return /^(https|libsql):\/\/./.test(url) ? null : 'The URL must start with https:// or libsql://.';
+/** One WebSocket per operation: hello, wait for "ok", send the request, read one JSON reply. */
+function exchange(url: string, password: string, request: object): Promise<{ rows?: Row[] }> {
+  let ws: WebSocket | undefined;
+  const reply = new Promise<{ rows?: Row[] }>((resolve, reject) => {
+    const socket = (ws = new WebSocket(url));
+    let ready = false;
+    socket.onopen = () => socket.send(JSON.stringify({ token: password, vault: true }));
+    socket.onmessage = (e) => {
+      if (!ready) {
+        if (e.data !== 'ok') return reject(new Error('Unexpected reply from the relay.'));
+        ready = true;
+        return socket.send(JSON.stringify(request));
+      }
+      try {
+        const r = JSON.parse(e.data);
+        if (r.error) reject(new Error(String(r.error)));
+        else resolve(r);
+      } catch {
+        reject(new Error('Unexpected reply from the relay.'));
+      }
+    };
+    // The close reason is how the relay reports a rejected hello ("bad token", ...).
+    socket.onclose = (e) => reject(new Error(e.reason || (ready ? 'The relay closed the connection.' : 'Could not connect to the relay.')));
+  });
+  return withTimeout(reply, RELAY_TIMEOUT, 'Relay').finally(() => ws?.close());
 }
 
-export const saveSettings = (s: TursoSettings) => localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
-
-function localBackend(): Backend {
-  const read = (): Row[] => JSON.parse(localStorage.getItem(LOCAL_KEY) ?? '[]');
-  const write = (rows: Row[]) => localStorage.setItem(LOCAL_KEY, JSON.stringify(rows));
+export function relayBackend(url: string, password: string): Backend {
+  const call = (request: object) => exchange(url, password, request);
   return {
-    list: async () => read(),
-    put: async (row) => write([...read().filter((r) => r.id !== row.id), row]),
-    create: async (row) => {
-      const rows = read();
-      if (!rows.some((r) => r.id === row.id)) write([...rows, row]);
-    },
-    remove: async (id) => write(read().filter((r) => r.id !== id)),
+    list: async () => (await call({ op: 'list' })).rows ?? [],
+    put: async (row) => void (await call({ op: 'put', row })),
+    create: async (row) => void (await call({ op: 'create', row })),
+    remove: async (id) => void (await call({ op: 'remove', id })),
   };
 }
 
-function tursoBackend({ url, token }: TursoSettings): Backend {
-  const client = createClient({ url, authToken: token || undefined });
-  const ready = retryable(() =>
-    withTimeout(
-      client.execute(
-        'CREATE TABLE IF NOT EXISTS connections (id TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at INTEGER NOT NULL)',
-      ),
-      TURSO_TIMEOUT,
-      'Turso',
-    ),
-  );
-  const run = async (sql: string, args: (string | number)[] = []) => {
-    await ready();
-    return withTimeout(client.execute({ sql, args }), TURSO_TIMEOUT, 'Turso');
-  };
-  const insert = 'INSERT INTO connections (id, data, updated_at) VALUES (?, ?, ?)';
-  return {
-    list: async () =>
-      (await run('SELECT id, data, updated_at FROM connections')).rows.map((r) => ({
-        id: String(r.id),
-        data: String(r.data),
-        updated_at: Number(r.updated_at),
-      })),
-    put: async (row) => {
-      await run(`${insert} ON CONFLICT(id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at`, [
-        row.id,
-        row.data,
-        row.updated_at,
-      ]);
-    },
-    create: async (row) => {
-      await run(`${insert} ON CONFLICT(id) DO NOTHING`, [row.id, row.data, row.updated_at]);
-    },
-    remove: async (id) => {
-      await run('DELETE FROM connections WHERE id = ?', [id]);
-    },
-  };
-}
-
-export const makeBackend = (s: TursoSettings | null): Backend => (s ? tursoBackend(s) : localBackend());
+/** The relay password doubles as the vault master password. */
+export const openVault = ({ url, password }: RelaySettings) =>
+  Vault.unlock<ConnConfig>(relayBackend(url, password), password);
