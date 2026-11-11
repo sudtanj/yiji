@@ -1,0 +1,19 @@
+[package]
+name = "yiji-relay"
+version = "0.1.0"
+edition = "2021"
+description = "WebSocket-to-TCP relay for yiji"
+license = "MIT"
+
+[dependencies]
+futures-util = { version = "0.3.34", default-features = false, features = ["sink"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+subtle = "2.6.1"
+tokio = { version = "1.54", features = ["rt-multi-thread", "net", "io-util", "time", "macros", "sync"] }
+tokio-tungstenite = "0.30"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

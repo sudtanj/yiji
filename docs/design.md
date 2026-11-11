@@ -45,8 +45,8 @@ flowchart LR
 2. Client sends one text frame, JSON: `{"token":"<relay token>","host":"db.lan","port":5432}`.
 3. Relay checks the token (constant-time compare) and that `host:port` is in its allowlist.
    - On success it opens TCP to `host:port` and sends one text frame: `ok`.
-   - On failure it closes with code 1008 and a short reason (`bad token`, `target not allowed`, `connect failed`).
-4. After `ok`, every frame in both directions is binary and carries raw database protocol bytes. The relay copies bytes and nothing else. Text frames after `ok` close the connection.
+   - On failure it closes with code 1008 and a short reason (`bad token`, `target not allowed`, `connect failed`, `bad hello`).
+4. After `ok`, every frame in both directions is binary and carries raw database protocol bytes. The relay copies bytes and nothing else. A text frame after `ok` closes the connection with code 1008 and reason `binary only`. Messages over 16 MiB also close it.
 5. Either side closing ends both the WebSocket and the TCP connection.
 
 Relay config, all from environment variables:
@@ -57,6 +57,8 @@ Relay config, all from environment variables:
 | `YIJI_TOKEN` | 32+ random chars | Shared secret. Relay refuses to start without it. |
 | `YIJI_ALLOW` | `db.lan:5432,10.0.0.5:27017` | Comma-separated `host:port` targets. Exact match. Refuses to start if empty. |
 | `YIJI_ORIGINS` | `https://sudtanj.github.io` | Optional comma-separated allowed `Origin` values. |
+| `YIJI_MAX_CONN` | `64` | Optional. Maximum simultaneous connections; default 64. |
+| `YIJI_IDLE_SECS` | `1800` | Optional. Close a connection after this many seconds without data in either direction; default 1800. |
 
 The token goes in the first frame because browsers cannot set custom headers on a WebSocket, and query strings end up in logs.
 
