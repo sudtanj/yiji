@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures_util::{SinkExt, StreamExt};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -23,7 +23,7 @@ async fn start_echo() -> u16 {
         loop {
             let (mut socket, _) = listener.accept().await.unwrap();
             tokio::spawn(async move {
-                let mut buf = [0u8; 1024];
+                let mut buf = vec![0u8; 64 * 1024];
                 while let Ok(n) = socket.read(&mut buf).await {
                     if n == 0 || socket.write_all(&buf[..n]).await.is_err() {
                         break;
@@ -244,4 +244,59 @@ async fn pending_cap_holds_back_new_connections() {
     timeout(Duration::from_secs(5), open(&url, echo))
         .await
         .unwrap();
+}
+
+/// Run with `cargo test --release --test relay bench -- --ignored --nocapture`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore]
+async fn bench_throughput_and_latency() {
+    const TOTAL: usize = 64 * 1024 * 1024;
+    const CHUNK: usize = 64 * 1024;
+    const WINDOW: usize = 4;
+    const PINGS: usize = 1000;
+    const FLOOR_MIB_S: f64 = 50.0;
+
+    let echo = start_echo().await;
+    let url = start_relay(&format!("127.0.0.1:{echo}")).await;
+    let mut ws = open(&url, echo).await;
+
+    // Send a window, then read it back, so neither side waits on an unread socket.
+    let start = Instant::now();
+    for _ in 0..TOTAL / (CHUNK * WINDOW) {
+        for _ in 0..WINDOW {
+            ws.send(Message::binary(vec![7; CHUNK])).await.unwrap();
+        }
+        let mut back = 0;
+        while back < CHUNK * WINDOW {
+            match ws.next().await.unwrap().unwrap() {
+                Message::Binary(b) => back += b.len(),
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+    }
+    let mib_s = (TOTAL >> 20) as f64 / start.elapsed().as_secs_f64();
+
+    let mut rtts = Vec::with_capacity(PINGS);
+    for _ in 0..PINGS {
+        let t = Instant::now();
+        ws.send(Message::binary(vec![1; 64])).await.unwrap();
+        ws.next().await.unwrap().unwrap();
+        rtts.push(t.elapsed());
+    }
+    rtts.sort();
+    let us = |d: Duration| d.as_secs_f64() * 1e6;
+    println!(
+        "bench: echo throughput {mib_s:.0} MiB/s ({} MiB in {CHUNK} B messages)",
+        TOTAL >> 20
+    );
+    println!(
+        "bench: 64 B round trip p50 {:.0} us, p99 {:.0} us, max {:.0} us",
+        us(rtts[PINGS / 2]),
+        us(rtts[PINGS * 99 / 100]),
+        us(rtts[PINGS - 1])
+    );
+    assert!(
+        mib_s >= FLOOR_MIB_S,
+        "throughput {mib_s:.0} MiB/s is below {FLOOR_MIB_S}"
+    );
 }

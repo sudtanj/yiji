@@ -4,13 +4,19 @@ permissions:
   contents: read
 
 on:
+  workflow_call:
   push:
+    branches-ignore: [main]
     paths: ['web/**', 'wasm/**', '.github/workflows/web.yml']
   pull_request:
     paths: ['web/**', 'wasm/**', '.github/workflows/web.yml']
 
+defaults:
+  run:
+    working-directory: web
+
 jobs:
-  build:
+  pkg:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,23 +26,110 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: wasm
-      - name: Install wasm-pack
-        run: cargo install wasm-pack --locked
+      - uses: jetli/wasm-pack-action@v0.4.0
       - name: Build yiji-wasm
         working-directory: wasm
         run: wasm-pack build --target web
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wasm-pkg
+          path: wasm/pkg
+          retention-days: 1
+
+  build:
+    needs: pkg
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: wasm-pkg
+          path: wasm/pkg
       - uses: actions/setup-node@v4
         with:
           node-version: 22
       - name: Install
-        working-directory: web
         run: npm install
       - name: Typecheck
-        working-directory: web
         run: npx tsc --noEmit
       - name: Test
-        working-directory: web
         run: npx vitest run
       - name: Build
-        working-directory: web
         run: npx vite build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+          retention-days: 1
+
+  integration:
+    needs: pkg
+    runs-on: ubuntu-latest
+    services:
+      sqld:
+        image: ghcr.io/tursodatabase/libsql-server:latest
+        ports: ['8080:8080']
+    env:
+      YIJI_LIBSQL_URL: http://127.0.0.1:8080
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: wasm-pkg
+          path: wasm/pkg
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+      - name: Wait for sqld
+        run: curl -sS -o /dev/null --retry 30 --retry-delay 1 --retry-connrefused "$YIJI_LIBSQL_URL/health"
+      - name: libSQL integration test
+        run: npx vitest run src/turso.integration.test.ts
+
+  smoke:
+    needs: [pkg, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: wasm-pkg
+          path: wasm/pkg
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+      - run: npx playwright install --with-deps chromium
+      - name: Smoke test the built app
+        run: npx playwright test
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: web/test-results
+          retention-days: 7
+
+  bench:
+    needs: pkg
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: wasm-pkg
+          path: wasm/pkg
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+      - name: Vault and grid benchmarks
+        shell: bash
+        run: npx vitest bench --run | tee bench.txt
+      - name: Summary
+        run: |
+          echo '### web bench' >> "$GITHUB_STEP_SUMMARY"
+          { echo '```'; sed 's/\x1b\[[0-9;]*m//g' bench.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

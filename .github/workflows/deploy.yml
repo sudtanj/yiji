@@ -1,0 +1,70 @@
+name: deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  relay:
+    uses: ./.github/workflows/relay.yml
+  wasm:
+    uses: ./.github/workflows/wasm.yml
+  web:
+    uses: ./.github/workflows/web.yml
+
+  deploy:
+    needs: [relay, wasm, web]
+    runs-on: ubuntu-latest
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/dist
+      - id: deployment
+        uses: actions/deploy-pages@v4
+
+  post-deploy-smoke:
+    needs: deploy
+    runs-on: ubuntu-latest
+    env:
+      SMOKE_URL: https://sudtanj.github.io/yiji/
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: wasm-pkg
+          path: wasm/pkg
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+      - run: npx playwright install --with-deps chromium
+      - name: Wait for the site
+        run: curl -fsS -o /dev/null --retry 12 --retry-delay 10 --retry-all-errors "$SMOKE_URL"
+      - name: Smoke test the live site
+        run: npx playwright test
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report-live
+          path: web/test-results
+          retention-days: 7

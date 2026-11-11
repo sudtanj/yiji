@@ -1,7 +1,12 @@
 name: wasm
 
+permissions:
+  contents: read
+
 on:
+  workflow_call:
   push:
+    branches-ignore: [main]
     paths: ["wasm/**", ".github/workflows/wasm.yml"]
   pull_request:
     paths: ["wasm/**", ".github/workflows/wasm.yml"]
