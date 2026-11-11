@@ -29,7 +29,10 @@ fn libsql_url() -> String {
 /// Row ids and prefixes are unique per test run because sqld state is shared between tests.
 fn unique(name: &str) -> String {
     static COUNTER: AtomicU32 = AtomicU32::new(0);
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
     format!("{name}-{nanos}-{n}/")
 }
@@ -73,7 +76,10 @@ async fn expect_refusal(mut ws: Client, reason: &str) {
 
 async fn call(ws: &mut Client, request: &str) -> Value {
     ws.send(Message::text(request)).await.unwrap();
-    match timeout(REPLY_TIMEOUT, ws.next()).await.expect("no reply from the relay") {
+    match timeout(REPLY_TIMEOUT, ws.next())
+        .await
+        .expect("no reply from the relay")
+    {
         Some(Ok(Message::Text(text))) => serde_json::from_str(&text).unwrap(),
         other => panic!("expected a text reply, got {other:?}"),
     }
@@ -118,22 +124,34 @@ async fn vault_round_trip_against_libsql() {
     assert_eq!(mine(&call(&mut ws, LIST).await, &prefix), [first.clone()]);
 
     let ignored = row(&a, "two", 2);
-    assert_eq!(call(&mut ws, &with_row("create", &ignored)).await, json!({}));
+    assert_eq!(
+        call(&mut ws, &with_row("create", &ignored)).await,
+        json!({})
+    );
     assert_eq!(mine(&call(&mut ws, LIST).await, &prefix), [first]);
 
     let replaced = row(&a, "three", 3);
     assert_eq!(call(&mut ws, &with_row("put", &replaced)).await, json!({}));
-    assert_eq!(mine(&call(&mut ws, LIST).await, &prefix), [replaced.clone()]);
+    assert_eq!(
+        mine(&call(&mut ws, LIST).await, &prefix),
+        [replaced.clone()]
+    );
 
     let awkward = "q'\"; DROP TABLE connections;-- \u{e9}\u{4e2d}\n";
     let second = row(&b, awkward, 1_700_000_000_000);
     assert_eq!(call(&mut ws, &with_row("put", &second)).await, json!({}));
     let listed = mine(&call(&mut ws, LIST).await, &prefix);
     assert_eq!(listed, [replaced.clone(), second.clone()]);
-    assert!(listed[1]["updated_at"].is_i64(), "updated_at must stay an integer");
+    assert!(
+        listed[1]["updated_at"].is_i64(),
+        "updated_at must stay an integer"
+    );
 
     let mut other = open_vault(&relay).await;
-    assert_eq!(mine(&call(&mut other, LIST).await, &prefix), [replaced, second.clone()]);
+    assert_eq!(
+        mine(&call(&mut other, LIST).await, &prefix),
+        [replaced, second.clone()]
+    );
 
     assert_eq!(call(&mut ws, &remove(&a)).await, json!({}));
     assert_eq!(mine(&call(&mut ws, LIST).await, &prefix), [second]);
@@ -209,7 +227,10 @@ async fn read_http_request(socket: &mut TcpStream) -> String {
         let complete = text.split_once("\r\n\r\n").is_some_and(|(head, body)| {
             let head = head.to_ascii_lowercase();
             let length = head.lines().find_map(|line| {
-                line.strip_prefix("content-length: ")?.trim().parse::<usize>().ok()
+                line.strip_prefix("content-length: ")?
+                    .trim()
+                    .parse::<usize>()
+                    .ok()
             });
             body.len() >= length.unwrap_or(0)
         });
@@ -272,11 +293,18 @@ async fn turso_receives_fixed_sql_bound_arguments_and_the_bearer_token() {
     assert_eq!(call(&mut ws, &put).await, json!({}));
 
     let seen = log.lock().unwrap().clone();
-    assert_eq!(seen.len(), 3, "create table once, then one statement per request");
+    assert_eq!(
+        seen.len(),
+        3,
+        "create table once, then one statement per request"
+    );
     for raw in &seen {
         let head = raw.to_ascii_lowercase();
         assert!(head.starts_with("post /v2/pipeline "), "{raw}");
-        assert!(head.contains(&format!("authorization: bearer {TURSO_TOKEN}")), "{raw}");
+        assert!(
+            head.contains(&format!("authorization: bearer {TURSO_TOKEN}")),
+            "{raw}"
+        );
     }
     let sql = |raw: &String| request_body(raw)["requests"][0]["stmt"]["sql"].to_string();
     assert!(sql(&seen[0]).contains("CREATE TABLE IF NOT EXISTS connections"));
@@ -292,7 +320,10 @@ async fn turso_receives_fixed_sql_bound_arguments_and_the_bearer_token() {
             { "type": "integer", "value": "5" },
         ])
     );
-    assert_eq!(request_body(&seen[2])["requests"][1], json!({ "type": "close" }));
+    assert_eq!(
+        request_body(&seen[2])["requests"][1],
+        json!({ "type": "close" })
+    );
 }
 
 #[tokio::test]

@@ -86,11 +86,9 @@ impl Vault {
         if !self.token.is_empty() {
             request = request.bearer_auth(&self.token);
         }
-        let response = request.send().await.map_err(|e| {
-            match e.is_timeout() {
-                true => "turso timed out".to_owned(),
-                false => "turso unreachable".to_owned(),
-            }
+        let response = request.send().await.map_err(|e| match e.is_timeout() {
+            true => "turso timed out".to_owned(),
+            false => "turso unreachable".to_owned(),
         })?;
         let status = response.status();
         if !status.is_success() {
@@ -106,9 +104,12 @@ fn normalize_url(url: &str) -> Result<String, &'static str> {
     if let Some(rest) = url.strip_prefix("libsql://") {
         return Ok(format!("https://{rest}"));
     }
-    let loopback = ["http://127.0.0.1", "http://localhost"].iter().any(|prefix| {
-        url.strip_prefix(prefix).is_some_and(|rest| rest.is_empty() || rest.starts_with([':', '/']))
-    });
+    let loopback = ["http://127.0.0.1", "http://localhost"]
+        .iter()
+        .any(|prefix| {
+            url.strip_prefix(prefix)
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with([':', '/']))
+        });
     if url.starts_with("https://") || loopback {
         return Ok(url.to_owned());
     }
@@ -189,8 +190,14 @@ mod tests {
 
     #[test]
     fn url_forms() {
-        assert_eq!(normalize_url("libsql://db.turso.io").unwrap(), "https://db.turso.io");
-        assert_eq!(normalize_url(" https://db.turso.io/ ").unwrap(), "https://db.turso.io");
+        assert_eq!(
+            normalize_url("libsql://db.turso.io").unwrap(),
+            "https://db.turso.io"
+        );
+        assert_eq!(
+            normalize_url(" https://db.turso.io/ ").unwrap(),
+            "https://db.turso.io"
+        );
         assert!(normalize_url("ftp://x").is_err());
         assert!(normalize_url("http://127.0.0.1:8080").is_ok());
         assert!(normalize_url("http://localhost.evil.com").is_err());
@@ -225,7 +232,13 @@ mod tests {
 
     #[test]
     fn rejects_unknown_or_malformed_requests() {
-        for text in ["", "{}", r#"{"op":"drop"}"#, r#"{"op":"put"}"#, r#"{"op":"remove"}"#] {
+        for text in [
+            "",
+            "{}",
+            r#"{"op":"drop"}"#,
+            r#"{"op":"put"}"#,
+            r#"{"op":"remove"}"#,
+        ] {
             assert!(serde_json::from_str::<Request>(text).is_err(), "{text}");
         }
     }
