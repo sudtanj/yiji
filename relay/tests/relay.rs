@@ -36,7 +36,7 @@ async fn start_echo() -> u16 {
 async fn start_relay(allow: &str) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("ws://{}", listener.local_addr().unwrap());
-    let config = Config::new(TOKEN, allow, "").unwrap();
+    let config = Config::new(TOKEN, allow, "*").unwrap();
     tokio::spawn(serve(listener, config));
     url
 }

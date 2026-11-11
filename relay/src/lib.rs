@@ -8,19 +8,21 @@ use serde::Deserialize;
 use subtle::ConstantTimeEq;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::Semaphore;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time::{sleep, timeout, Instant};
 use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
 use tokio_tungstenite::tungstenite::http::StatusCode;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
-use tokio_tungstenite::tungstenite::protocol::{CloseFrame, WebSocketConfig};
+use tokio_tungstenite::tungstenite::protocol::{CloseFrame, Role, WebSocketConfig};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{accept_hdr_async_with_config, WebSocketStream};
 
 const MIN_TOKEN_LEN: usize = 32;
-const STEP_TIMEOUT: Duration = Duration::from_secs(10);
+const STEP_TIMEOUT: Duration = Duration::from_secs(5);
 const READ_BUF: usize = 16 * 1024;
 const DEFAULT_MAX_CONN: usize = 64;
+const DEFAULT_MAX_PENDING: usize = 16;
+const HELLO_LIMIT: usize = 4 * 1024;
 const DEFAULT_IDLE: Duration = Duration::from_secs(30 * 60);
 // ponytail: 16 MiB per message/frame. Mongo allows 48 MB messages but drivers chunk below that.
 const MAX_MESSAGE: usize = 16 * 1024 * 1024;
@@ -37,12 +39,14 @@ pub struct Config {
     origins: HashSet<String>,
     /// Connections served at once; further clients wait in the accept backlog.
     pub max_conn: usize,
+    /// Connections that have not yet passed the token and allowlist checks.
+    pub max_pending: usize,
     /// Close a relayed connection after this long without data in either direction.
     pub idle: Duration,
 }
 
 impl Config {
-    /// `allow` and `origins` are comma-separated. Empty `origins` accepts any Origin.
+    /// `allow` and `origins` are comma-separated. `origins` must be set; `*` accepts any Origin.
     pub fn new(token: &str, allow: &str, origins: &str) -> Result<Self, &'static str> {
         if token.chars().count() < MIN_TOKEN_LEN {
             return Err("YIJI_TOKEN must be at least 32 characters");
@@ -51,15 +55,22 @@ impl Config {
         if allow.is_empty() {
             return Err("YIJI_ALLOW must list at least one host:port");
         }
+        let origins = split_list(origins);
+        if origins.is_empty() {
+            return Err("YIJI_ORIGINS must be set; use * to allow any origin");
+        }
         Ok(Self {
             token: token.to_owned(),
             allow,
-            origins: split_list(origins),
+            origins,
             max_conn: DEFAULT_MAX_CONN,
+            max_pending: DEFAULT_MAX_PENDING,
             idle: DEFAULT_IDLE,
         })
     }
 
+    // ponytail: ct_eq returns early on a length mismatch, so the token length leaks.
+    // Compare fixed-length hashes of both sides if that ever matters.
     fn token_matches(&self, token: &str) -> bool {
         self.token.as_bytes().ct_eq(token.as_bytes()).into()
     }
@@ -90,10 +101,14 @@ fn parse_hello(text: &str) -> Result<Hello, &'static str> {
 
 pub async fn serve(listener: TcpListener, config: Config) {
     let slots = Arc::new(Semaphore::new(config.max_conn));
+    let pending_slots = Arc::new(Semaphore::new(config.max_pending));
     let config = Arc::new(config);
     loop {
-        // Take the slot before accepting so excess clients queue in the kernel backlog.
+        // Take both slots before accepting so excess clients queue in the kernel backlog.
         let Ok(permit) = slots.clone().acquire_owned().await else {
+            return;
+        };
+        let Ok(pending) = pending_slots.clone().acquire_owned().await else {
             return;
         };
         let (stream, peer) = match listener.accept().await {
@@ -107,7 +122,7 @@ pub async fn serve(listener: TcpListener, config: Config) {
         };
         let config = config.clone();
         tokio::spawn(async move {
-            match connection(stream, peer, &config).await {
+            match connection(stream, peer, pending, &config).await {
                 Ok(()) => eprintln!("{peer} closed"),
                 Err(reason) => eprintln!("{peer} refused: {reason}"),
             }
@@ -119,6 +134,7 @@ pub async fn serve(listener: TcpListener, config: Config) {
 async fn connection(
     stream: TcpStream,
     peer: SocketAddr,
+    pending: OwnedSemaphorePermit,
     config: &Config,
 ) -> Result<(), &'static str> {
     // Latency matters more than packing for database round trips; failure is harmless.
@@ -126,7 +142,7 @@ async fn connection(
     // tungstenite fixes the callback error type.
     #[allow(clippy::result_large_err)]
     let check_origin = |request: &Request, response: Response| {
-        let allowed = config.origins.is_empty()
+        let allowed = config.origins.contains("*")
             || request
                 .headers()
                 .get("origin")
@@ -140,10 +156,10 @@ async fn connection(
             Err(refusal)
         }
     };
-    let limits = WebSocketConfig::default()
-        .max_message_size(Some(MAX_MESSAGE))
-        .max_frame_size(Some(MAX_MESSAGE));
-    let handshake = accept_hdr_async_with_config(stream, check_origin, Some(limits));
+    let hello_limits = WebSocketConfig::default()
+        .max_message_size(Some(HELLO_LIMIT))
+        .max_frame_size(Some(HELLO_LIMIT));
+    let handshake = accept_hdr_async_with_config(stream, check_origin, Some(hello_limits));
     let mut ws = timeout(STEP_TIMEOUT, handshake)
         .await
         .map_err(|_| "handshake timed out")?
@@ -162,6 +178,14 @@ async fn connection(
         Ok(hello) => hello,
         Err(reason) => return Err(reject(&mut ws, reason).await),
     };
+    drop(pending);
+    // WebSocketStream has no set_config, so rebuild it with the large limits. Bytes tungstenite
+    // read ahead are lost, so clients must wait for `ok` before sending data.
+    let relay_limits = WebSocketConfig::default()
+        .max_message_size(Some(MAX_MESSAGE))
+        .max_frame_size(Some(MAX_MESSAGE));
+    let mut ws =
+        WebSocketStream::from_raw_socket(ws.into_inner(), Role::Server, Some(relay_limits)).await;
 
     let target = (hello.host.as_str(), hello.port);
     let mut tcp = match timeout(STEP_TIMEOUT, TcpStream::connect(target)).await {
@@ -182,7 +206,7 @@ async fn connection(
         tokio::select! {
             frame = ws.next() => match frame {
                 Some(Ok(Message::Binary(bytes))) => {
-                    if tcp.write_all(&bytes).await.is_err() {
+                    if !matches!(timeout(config.idle, tcp.write_all(&bytes)).await, Ok(Ok(()))) {
                         break;
                     }
                     idle.as_mut().reset(Instant::now() + config.idle);
@@ -198,7 +222,8 @@ async fn connection(
             read = tcp.read(&mut buf) => match read {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
-                    if ws.send(Message::binary(buf[..n].to_vec())).await.is_err() {
+                    let frame = Message::binary(buf[..n].to_vec());
+                    if !matches!(timeout(config.idle, ws.send(frame)).await, Ok(Ok(()))) {
                         break;
                     }
                     idle.as_mut().reset(Instant::now() + config.idle);
@@ -258,14 +283,15 @@ mod tests {
 
     #[test]
     fn config_refuses_weak_setup() {
-        assert!(Config::new("short", "db.lan:5432", "").is_err());
-        assert!(Config::new(TOKEN, "", "").is_err());
-        assert!(Config::new(TOKEN, " , ", "").is_err());
+        assert!(Config::new("short", "db.lan:5432", "*").is_err());
+        assert!(Config::new(TOKEN, "", "*").is_err());
+        assert!(Config::new(TOKEN, " , ", "*").is_err());
+        assert!(Config::new(TOKEN, "a:1", "").is_err());
     }
 
     #[test]
     fn allowlist_is_exact() {
-        let config = Config::new(TOKEN, "db.lan:5432, 10.0.0.5:27017", "").unwrap();
+        let config = Config::new(TOKEN, "db.lan:5432, 10.0.0.5:27017", "*").unwrap();
         assert!(config.allows("db.lan", 5432));
         assert!(config.allows("10.0.0.5", 27017));
         assert!(!config.allows("db.lan", 5433));
@@ -275,7 +301,7 @@ mod tests {
 
     #[test]
     fn token_compare() {
-        let config = Config::new(TOKEN, "a:1", "").unwrap();
+        let config = Config::new(TOKEN, "a:1", "*").unwrap();
         assert!(config.token_matches(TOKEN));
         assert!(!config.token_matches(&TOKEN[1..]));
         assert!(!config.token_matches(""));

@@ -35,6 +35,9 @@ fn from_env() -> Result<(Config, String), String> {
     if let Some(n) = positive("YIJI_MAX_CONN")? {
         config.max_conn = n;
     }
+    if let Some(n) = positive("YIJI_MAX_PENDING")? {
+        config.max_pending = n;
+    }
     if let Some(secs) = positive("YIJI_IDLE_SECS")? {
         config.idle = Duration::from_secs(secs);
     }

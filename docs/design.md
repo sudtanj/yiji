@@ -42,7 +42,7 @@ flowchart LR
 ## Relay protocol (v1)
 
 1. Client opens a WebSocket to the relay URL (for example `wss://relay.example/`).
-2. Client sends one text frame, JSON: `{"token":"<relay token>","host":"db.lan","port":5432}`.
+2. Client sends one text frame (at most 4 KiB), JSON: `{"token":"<relay token>","host":"db.lan","port":5432}`.
 3. Relay checks the token (constant-time compare) and that `host:port` is in its allowlist.
    - On success it opens TCP to `host:port` and sends one text frame: `ok`.
    - On failure it closes with code 1008 and a short reason (`bad token`, `target not allowed`, `connect failed`, `bad hello`).
@@ -56,8 +56,9 @@ Relay config, all from environment variables:
 | `YIJI_LISTEN` | `127.0.0.1:8080` | Address to listen on. TLS is terminated in front (Cloudflare Tunnel, Tailscale, reverse proxy). |
 | `YIJI_TOKEN` | 32+ random chars | Shared secret. Relay refuses to start without it. |
 | `YIJI_ALLOW` | `db.lan:5432,10.0.0.5:27017` | Comma-separated `host:port` targets. Exact match. Refuses to start if empty. |
-| `YIJI_ORIGINS` | `https://sudtanj.github.io` | Optional comma-separated allowed `Origin` values. |
+| `YIJI_ORIGINS` | `https://sudtanj.github.io` | Comma-separated allowed `Origin` values. Required: refuses to start if empty. `*` allows any origin. |
 | `YIJI_MAX_CONN` | `64` | Optional. Maximum simultaneous connections; default 64. |
+| `YIJI_MAX_PENDING` | `16` | Optional. Maximum connections that have not yet passed the token and allowlist checks; default 16. |
 | `YIJI_IDLE_SECS` | `1800` | Optional. Close a connection after this many seconds without data in either direction; default 1800. |
 
 The token goes in the first frame because browsers cannot set custom headers on a WebSocket, and query strings end up in logs.
@@ -71,7 +72,8 @@ Built with `wasm-pack build --target web`. Results cross into JS as JSON strings
 class PgConn {
   static connect(relayUrl: string, relayToken: string, host: string, port: number,
                  user: string, password: string, database: string): Promise<PgConn>;
-  // Returns JSON: {"columns":[{"name":"id","type":"int4"}],"rows":[[1]],"rowsAffected":null}
+  // Returns JSON: {"columns":[{"name":"id","type":"text"}],"rows":[["1"]],"rowsAffected":null}
+  // v1 uses the simple query protocol, so every value is a string or null and every column type is "text".
   // Multiple statements: result of the last one that returned rows, else rowsAffected of the last.
   query(sql: string): Promise<string>;
   close(): void;
