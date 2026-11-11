@@ -1,0 +1,29 @@
+{
+  "name": "yiji-web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@codemirror/lang-json": "6.0.2",
+    "@codemirror/lang-sql": "6.10.0",
+    "@codemirror/state": "6.7.6",
+    "@codemirror/view": "6.43.15",
+    "@libsql/client": "0.18.0",
+    "@sqlite.org/sqlite-wasm": "3.54.1-build1",
+    "codemirror": "6.0.2",
+    "preact": "11.2.0",
+    "yiji-wasm": "file:../wasm/pkg"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "2.10.6",
+    "typescript": "7.0.2",
+    "vite": "8.3.8",
+    "vitest": "5.1.0"
+  }
+}

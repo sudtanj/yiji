@@ -1,0 +1,11 @@
+{
+  "name": "Yiji",
+  "short_name": "Yiji",
+  "description": "Database client for PostgreSQL, MongoDB and SQLite",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f0f0f0",
+  "theme_color": "#f0f0f0",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}
