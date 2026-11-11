@@ -5,6 +5,11 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# A newer push cancels an older run still testing, so an old build never deploys last.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -18,6 +23,7 @@ jobs:
 
   deploy:
     needs: [relay, wasm, web]
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     concurrency:
       group: pages

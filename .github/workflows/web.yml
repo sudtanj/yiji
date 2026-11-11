@@ -84,7 +84,7 @@ jobs:
       - name: Wait for sqld
         run: curl -sS -o /dev/null --retry 30 --retry-delay 1 --retry-connrefused "$YIJI_LIBSQL_URL/health"
       - name: libSQL integration test
-        run: npx vitest run src/turso.integration.test.ts
+        run: test -n "$YIJI_LIBSQL_URL" && npx vitest run src/turso.integration.test.ts
 
   smoke:
     needs: [pkg, build]
@@ -128,8 +128,8 @@ jobs:
       - run: npm install
       - name: Vault and grid benchmarks
         shell: bash
-        run: npx vitest bench --run | tee bench.txt
+        run: YIJI_BENCH=1 npx vitest run src/vault.bench.test.ts | tee bench.txt
       - name: Summary
         run: |
           echo '### web bench' >> "$GITHUB_STEP_SUMMARY"
-          { echo '```'; sed 's/\x1b\[[0-9;]*m//g' bench.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          { echo '```'; grep -a 'BENCH' bench.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

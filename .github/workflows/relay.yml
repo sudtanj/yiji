@@ -66,4 +66,4 @@ jobs:
       - name: Summary
         run: |
           echo '### relay bench' >> "$GITHUB_STEP_SUMMARY"
-          grep '^bench' bench.txt | sed 's/^bench: /- /' >> "$GITHUB_STEP_SUMMARY"
+          grep 'bench: ' bench.txt | sed 's/.*bench: /- /' >> "$GITHUB_STEP_SUMMARY"
