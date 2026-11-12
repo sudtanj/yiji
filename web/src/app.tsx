@@ -3,7 +3,7 @@ import { clearSettings } from './backends';
 import { AboutDialog, ConnDialog, MessageDialog } from './dialogs';
 import { type ConnConfig, type Session, type Target, connect } from './db';
 import { EXECUTE_EVENT, SqlTab, TableTab } from './editor';
-import { Icon, type IconId } from './icons';
+import { Icon } from './icons';
 import { Navigator } from './navigator';
 import type { Vault } from './store';
 import { errMsg } from './util';
@@ -26,27 +26,58 @@ interface MenuItem {
   hint?: string;
   run: () => void;
   disabled?: boolean;
+  /** Draws a divider above this item. */
+  sep?: boolean;
 }
 
 let tabSeq = 0;
 
-function Items({ items, onDone }: { items: MenuItem[]; onDone: () => void }) {
+function Menu({ items, onDone, pos }: { items: MenuItem[]; onDone: () => void; pos?: { x: number; y: number } }) {
+  const box = useRef<HTMLDivElement>(null);
+  const enabled = () => [...box.current!.querySelectorAll<HTMLElement>('button:not(:disabled)')];
+  const [opener] = useState(() => document.activeElement as HTMLElement | null);
+  useEffect(() => {
+    enabled()[0]?.focus();
+    // Only restore focus if nothing else took it (e.g. a dialog opened by the chosen item).
+    return () => {
+      const a = document.activeElement;
+      if (!a || a === document.body) opener?.focus?.();
+    };
+  }, []);
+  const onKeyDown = (e: KeyboardEvent) => {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    e.preventDefault();
+    const btns = enabled();
+    const next = btns.indexOf(document.activeElement as HTMLElement) + (e.key === 'ArrowDown' ? 1 : -1);
+    btns[(next + btns.length) % btns.length]?.focus();
+  };
   return (
-    <>
+    <div
+      ref={box}
+      class={`popup${pos ? ' ctx' : ''}`}
+      role="menu"
+      style={pos ? { left: pos.x, top: pos.y } : undefined}
+      onKeyDown={onKeyDown}
+      onClick={(e) => e.stopPropagation()}
+    >
       {items.map((i) => (
-        <button
-          role="menuitem"
-          disabled={i.disabled}
-          onClick={() => {
-            onDone();
-            i.run();
-          }}
-        >
-          <span>{i.label}</span>
-          <span class="hint">{i.hint}</span>
-        </button>
+        <>
+          {i.sep && <div class="menu-sep" role="separator" />}
+          <button
+            class="menu-item"
+            role="menuitem"
+            disabled={i.disabled}
+            onClick={() => {
+              onDone();
+              i.run();
+            }}
+          >
+            <span>{i.label}</span>
+            <span class="hint">{i.hint}</span>
+          </button>
+        </>
       ))}
-    </>
+    </div>
   );
 }
 
@@ -129,7 +160,7 @@ export function App({ vault }: { vault: Vault<ConnConfig> | null }) {
   // True when the user chose to keep a local SQLite database that has unsaved changes.
   const keepChanges = (id: string) =>
     !!sessions[id]?.dirty?.() &&
-    !confirm('This SQLite database has unsaved changes (File > Save SQLite file). Discard them?');
+    !confirm('This SQLite database has unsaved changes (connection menu > Save SQLite file). Discard them?');
 
   const askDisconnect = (id: string) => {
     if (!keepChanges(id)) disconnect(id);
@@ -204,7 +235,11 @@ export function App({ vault }: { vault: Vault<ConnConfig> | null }) {
       setMenu('');
       setCtx(null);
     };
-    const onEsc = (e: KeyboardEvent) => e.key === 'Escape' && close();
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      close();
+      setDrawer(false);
+    };
     window.addEventListener('keydown', onKey, true);
     window.addEventListener('keydown', onEsc);
     window.addEventListener('click', close);
@@ -220,83 +255,78 @@ export function App({ vault }: { vault: Vault<ConnConfig> | null }) {
     return [
       { label: 'Connect', run: () => connectTo(id), disabled: on },
       { label: 'Disconnect', run: () => askDisconnect(id), disabled: !on },
-      { label: 'Edit Connection', run: () => setDialog({ type: 'conn', initial: conns.find((c) => c.id === id) }) },
-      { label: 'Delete', run: () => removeConn(id) },
-      { label: 'SQL Editor', run: () => newScript(id) },
+      { label: 'Edit connection...', run: () => setDialog({ type: 'conn', initial: conns.find((c) => c.id === id) }) },
+      { label: 'Save SQLite file', run: () => sessions[id]?.save?.(), disabled: !sessions[id]?.save },
+      { label: 'New SQL script', hint: 'Ctrl+]', run: () => newScript(id) },
+      { label: 'Delete', run: () => removeConn(id), sep: true },
     ];
   };
 
   const newConn = () => setDialog({ type: 'conn' });
-  const menus: Record<string, MenuItem[]> = {
-    File: [
-      { label: 'New Database Connection...', run: newConn },
-      { label: 'New SQL script', hint: 'Ctrl+]', run: () => newScript() },
-      { label: 'Save SQLite file', run: () => live?.save?.(), disabled: !live?.save },
-      {
-        label: 'Log out',
-        run: () => {
-          if (Object.keys(sessions).some(keepChanges)) return;
-          if (!confirm('Log out? This forgets the relay URL and password on this device.')) return;
-          clearSettings();
-          leaving.current = true;
-          location.reload();
-        },
+  const moreItems: MenuItem[] = [
+    { label: 'About Yiji', run: () => setDialog({ type: 'about' }) },
+    {
+      label: 'Log out',
+      sep: true,
+      run: () => {
+        if (Object.keys(sessions).some(keepChanges)) return;
+        if (!confirm('Log out? This forgets the relay URL and password on this device.')) return;
+        clearSettings();
+        leaving.current = true;
+        location.reload();
       },
-    ],
-    Database: [
-      { label: 'Connect', run: () => connectTo(cur!.id), disabled: !cur || !!live },
-      { label: 'Disconnect', run: () => askDisconnect(cur!.id), disabled: !live },
-      { label: 'Edit Connection...', run: () => setDialog({ type: 'conn', initial: cur }), disabled: !cur },
-      { label: 'Delete', run: () => removeConn(cur!.id), disabled: !cur },
-    ],
-    'SQL Editor': [
-      { label: 'New SQL script', hint: 'Ctrl+]', run: () => newScript() },
-      { label: 'Execute', hint: 'Ctrl+Enter', run: execute, disabled: !runnable },
-    ],
-    Help: [{ label: 'About Yiji', run: () => setDialog({ type: 'about' }) }],
-  };
-
-  const tool = (icon: IconId, label: string, run: () => void, disabled = false, cls = '') => (
-    <button class={`tb ${cls}`} title={label} aria-label={label} disabled={disabled} onClick={run}>
-      <Icon n={icon} />
-    </button>
-  );
+    },
+  ];
 
   return (
     <div class="app">
-      <div class="menubar" role="menubar" onClick={(e) => e.stopPropagation()}>
-        {Object.entries(menus).map(([name, items]) => (
-          <div class="menu-wrap">
-            <button
-              role="menuitem"
-              aria-haspopup="true"
-              aria-expanded={menu === name}
-              class={menu === name ? 'open' : ''}
-              onClick={() => setMenu(menu === name ? '' : name)}
-              onMouseEnter={() => menu && setMenu(name)}
-            >
-              {name}
-            </button>
-            {menu === name && (
-              <div class="popup" role="menu">
-                <Items items={items} onDone={() => setMenu('')} />
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-      <div class="toolbar" role="toolbar" aria-label="Main toolbar">
-        {tool('menu', 'Database Navigator', () => setDrawer((d) => !d), false, 'only-phone')}
-        {tool('newConn', 'New Database Connection', newConn)}
-        {tool('plug', 'Connect', () => connectTo(cur!.id), !cur || !!live)}
-        {tool('unplug', 'Disconnect', () => askDisconnect(cur!.id), !live)}
-        <span class="sep" />
-        {tool('sql', 'SQL Editor (new script), Ctrl+]', () => newScript())}
-        {tool('play', 'Execute SQL, Ctrl+Enter', execute, !runnable)}
-      </div>
+      <header class="appbar" onClick={(e) => e.stopPropagation()}>
+        <button class="icon-btn only-phone" aria-label="Connections" aria-expanded={drawer} onClick={() => setDrawer((d) => !d)}>
+          <Icon n="menu" />
+        </button>
+        <h1 class="app-title">Yiji</h1>
+        <span class="grow" />
+        <div class="menu-wrap">
+          <button
+            class="chip"
+            aria-haspopup="menu"
+            aria-expanded={menu === 'conn'}
+            disabled={!cur}
+            onClick={() => (setCtx(null), setMenu(menu === 'conn' ? '' : 'conn'))}
+          >
+            <span class={`dot${live ? ' on' : ''}`} aria-hidden="true" />
+            <span class="label">{cur ? `${cur.name} · ${live ? 'connected' : 'disconnected'}` : 'No connection selected'}</span>
+          </button>
+          {menu === 'conn' && cur && <Menu items={connItems(cur.id)} onDone={() => setMenu('')} />}
+        </div>
+        <button class="btn btn-tonal" aria-label="New script" title="New SQL script (Ctrl+])" onClick={() => newScript()}>
+          <Icon n="sql" />
+          <span class="lbl">New script</span>
+        </button>
+        <button class="btn btn-filled" aria-label="Run" title="Run (Ctrl+Enter)" disabled={!runnable} onClick={execute}>
+          <Icon n="play" />
+          <span class="lbl">Run</span>
+        </button>
+        <div class="menu-wrap">
+          <button
+            class="icon-btn"
+            aria-label="More"
+            aria-haspopup="menu"
+            aria-expanded={menu === 'more'}
+            onClick={() => (setCtx(null), setMenu(menu === 'more' ? '' : 'more'))}
+          >
+            <Icon n="more" />
+          </button>
+          {menu === 'more' && <Menu items={moreItems} onDone={() => setMenu('')} />}
+        </div>
+      </header>
       <div class="main">
-        <aside class={`navigator${drawer ? ' open' : ''}`}>
-          <div class="panel-title">Database Navigator</div>
+        <aside class={`navigator${drawer ? ' open' : ''}`} aria-label="Connections">
+          <h2 class="nav-title">Connections</h2>
+          <button class="fab" onClick={newConn}>
+            <Icon n="add" />
+            New connection
+          </button>
           <Navigator
             conns={conns}
             sessions={sessions}
@@ -304,7 +334,6 @@ export function App({ vault }: { vault: Vault<ConnConfig> | null }) {
             onOpen={openTable}
             onConnect={connectTo}
             onContext={(x, y, id) => setCtx({ x, y, id })}
-            onNew={newConn}
           />
         </aside>
         {drawer && <div class="scrim" onClick={() => setDrawer(false)} />}
@@ -354,20 +383,27 @@ export function App({ vault }: { vault: Vault<ConnConfig> | null }) {
               </div>
             </>
           ) : (
-            <p class="note empty">
-              No editor is open. Press Ctrl+] for a new SQL script, or double-click a table in the navigator.
-            </p>
+            <div class="empty-state">
+              <h2>Nothing open</h2>
+              <p>Start a SQL script, or open a table from a connection. Ctrl+] creates a script from anywhere.</p>
+              <div class="empty-actions">
+                <button class="btn btn-filled" onClick={() => newScript()}>
+                  <Icon n="sql" />
+                  New script
+                </button>
+                <button class="btn btn-text" onClick={newConn}>
+                  New connection
+                </button>
+              </div>
+            </div>
           )}
         </section>
       </div>
       <div class="statusbar" role="status">
-        <span>{status}</span>
-        <span>{cur ? `${cur.name}: ${live ? 'connected' : 'disconnected'}` : ''}</span>
+        {status}
       </div>
       {ctx && (
-        <div class="popup ctx" role="menu" style={{ left: ctx.x, top: ctx.y }} onClick={(e) => e.stopPropagation()}>
-          <Items items={connItems(ctx.id)} onDone={() => setCtx(null)} />
-        </div>
+        <Menu items={connItems(ctx.id)} onDone={() => setCtx(null)} pos={ctx} />
       )}
       {dialog?.type === 'conn' && <ConnDialog initial={dialog.initial} onSave={saveConn} onClose={() => setDialog(null)} />}
       {dialog?.type === 'about' && <AboutDialog onClose={() => setDialog(null)} />}

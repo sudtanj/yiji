@@ -68,7 +68,7 @@ function Node(p: NodeProps) {
         aria-expanded={p.load ? st.open : undefined}
         aria-selected={p.picked === p.path}
         tabIndex={0}
-        style={{ paddingLeft: 4 + p.depth * 16 }}
+        style={{ paddingLeft: 8 + p.depth * 16 }}
         onClick={() => {
           select();
           // On phones a single tap opens a table; there is no practical double-tap.
@@ -131,7 +131,6 @@ export function Navigator(props: {
   onOpen: (connId: string, t: Target) => void;
   onConnect: (connId: string) => void;
   onContext: (x: number, y: number, connId: string) => void;
-  onNew: () => void;
 }) {
   const [picked, setPicked] = useState('');
   const shared: Shared = {
@@ -145,14 +144,7 @@ export function Navigator(props: {
   };
   return (
     <div class="tree" role="tree" aria-label="Database Navigator">
-      {props.conns.length === 0 && (
-        <p class="note">
-          No connections yet.{' '}
-          <button class="link" onClick={props.onNew}>
-            New Database Connection...
-          </button>
-        </p>
-      )}
+      {props.conns.length === 0 && <p class="note">No connections yet. Choose New connection to add a PostgreSQL, MongoDB or SQLite database.</p>}
       {props.conns.map((c) => (
         <Node
           {...shared}

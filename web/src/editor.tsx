@@ -14,31 +14,31 @@ import { PAGE_SIZE } from './paging';
 export const EXECUTE_EVENT = 'yiji:execute';
 
 const highlight = HighlightStyle.define([
-  { tag: [t.keyword, t.operatorKeyword], color: '#7bb4ff' },
-  { tag: [t.string, t.special(t.string)], color: '#8fd6a4' },
-  { tag: [t.number, t.bool, t.null], color: '#e6b673' },
-  { tag: t.comment, color: '#6b7686', fontStyle: 'italic' },
-  { tag: [t.typeName, t.className, t.function(t.variableName)], color: '#c3a6ff' },
-  { tag: [t.propertyName, t.attributeName], color: '#82aaff' },
+  { tag: [t.keyword, t.operatorKeyword], color: '#53dbc9' },
+  { tag: [t.string, t.special(t.string)], color: '#a8d5a2' },
+  { tag: [t.number, t.bool, t.null], color: '#f2c078' },
+  { tag: t.comment, color: '#8a9591', fontStyle: 'italic' },
+  { tag: [t.typeName, t.className, t.function(t.variableName)], color: '#adcae6' },
+  { tag: [t.propertyName, t.attributeName], color: '#9fd0f0' },
 ]);
 
 const theme = EditorView.theme(
   {
-    '&': { height: '100%', fontSize: '13px', color: 'var(--fg)', backgroundColor: 'var(--bg)' },
+    '&': { height: '100%', fontSize: '13px', color: 'var(--on-surface)', backgroundColor: 'var(--surface-lowest)' },
     '.cm-scroller': { fontFamily: 'var(--font-mono)' },
-    '.cm-content': { caretColor: 'var(--fg)' },
+    '.cm-content': { caretColor: 'var(--primary)', padding: '8px 0' },
     '&.cm-focused': { outline: 'none' },
-    '.cm-cursor': { borderLeftColor: 'var(--fg)' },
-    '.cm-gutters': { backgroundColor: 'var(--panel)', color: 'var(--muted)', border: 'none', borderRight: '1px solid var(--border)' },
-    '.cm-activeLine': { backgroundColor: 'var(--hover)' },
-    '.cm-activeLineGutter': { backgroundColor: 'var(--hover)', color: 'var(--fg)' },
+    '.cm-cursor': { borderLeftColor: 'var(--primary)' },
+    '.cm-gutters': { backgroundColor: 'var(--surface-lowest)', color: 'var(--outline)', border: 'none' },
+    '.cm-activeLine': { backgroundColor: 'var(--surface-low)' },
+    '.cm-activeLineGutter': { backgroundColor: 'var(--surface-low)', color: 'var(--on-surface)' },
     '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection': {
-      backgroundColor: 'var(--sel)',
+      backgroundColor: 'var(--secondary-container)',
     },
-    '.cm-tooltip': { backgroundColor: 'var(--panel-2)', color: 'var(--fg)', border: '1px solid var(--border)' },
-    '.cm-tooltip-autocomplete ul li[aria-selected]': { backgroundColor: 'var(--accent)', color: 'var(--accent-fg)' },
-    '.cm-panels': { backgroundColor: 'var(--panel)', color: 'var(--fg)' },
-    '.cm-placeholder': { color: 'var(--muted)' },
+    '.cm-tooltip': { backgroundColor: 'var(--surface-high)', color: 'var(--on-surface)', border: 'none', borderRadius: '8px', overflow: 'hidden' },
+    '.cm-tooltip-autocomplete ul li[aria-selected]': { backgroundColor: 'var(--primary-container)', color: 'var(--on-primary-container)' },
+    '.cm-panels': { backgroundColor: 'var(--surface-low)', color: 'var(--on-surface)' },
+    '.cm-placeholder': { color: 'var(--on-surface-variant)' },
   },
   { dark: true },
 );
@@ -156,7 +156,7 @@ export function TableTab({ target, session }: { target: Target; session?: Sessio
           Data
         </button>
         {sub === 'data' && (
-          <button class="tb" title="Refresh" aria-label="Refresh" onClick={() => load(page)}>
+          <button class="icon-btn" title="Refresh" aria-label="Refresh" onClick={() => load(page)}>
             <Icon n="refresh" />
           </button>
         )}
@@ -168,14 +168,14 @@ export function TableTab({ target, session }: { target: Target; session?: Sessio
         <span role="status">{sub === 'data' ? footer(data) : ''}</span>
         {sub === 'data' && (
           <span class="pager">
-            <button disabled={busy || page === 0} onClick={() => load(0)}>
+            <button class="btn btn-text" disabled={busy || page === 0} onClick={() => load(0)}>
               First
             </button>
-            <button disabled={busy || page === 0} onClick={() => load(page - 1)}>
+            <button class="btn btn-text" disabled={busy || page === 0} onClick={() => load(page - 1)}>
               Prev
             </button>
             <span class="pager-range">{n ? `rows ${first + 1}–${first + n}` : busy ? '' : 'no rows'}</span>
-            <button disabled={busy || n < PAGE_SIZE} onClick={() => load(page + 1)}>
+            <button class="btn btn-text" disabled={busy || n < PAGE_SIZE} onClick={() => load(page + 1)}>
               Next
             </button>
           </span>

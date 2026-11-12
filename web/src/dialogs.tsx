@@ -32,7 +32,7 @@ export function Modal(props: {
           props.onSubmit?.();
         }}
       >
-        <div class="dlg-title">{props.title}</div>
+        <h2 class="dlg-title">{props.title}</h2>
         <div class="dlg-body">{props.children}</div>
         <div class="dlg-buttons">{props.buttons}</div>
       </form>
@@ -237,14 +237,14 @@ export function ConnDialog(props: {
         <>
           {step === 2 && (
             <button type="button" class="left" onClick={test} disabled={busy}>
-              Test Connection...
+              Test connection
             </button>
           )}
           <button type="button" onClick={() => setStep(1)} disabled={step === 1 || !!props.initial}>
-            &lt; Back
+            Back
           </button>
           <button type="submit" class="primary" disabled={busy}>
-            {step === 1 ? 'Next >' : 'Finish'}
+            {step === 1 ? 'Next' : 'Save'}
           </button>
           <button type="button" onClick={props.onClose}>
             Cancel
@@ -276,7 +276,7 @@ export function ConnDialog(props: {
         </>
       ) : (
         <>
-          <div class="section">Main</div>
+          <h3 class="section">Main</h3>
           {cfg.kind === 'sqlite' ? (
             <>
               <div class="field">
@@ -296,7 +296,7 @@ export function ConnDialog(props: {
                 </div>
               </div>
               {cfg.sqliteMode === 'file' ? (
-                <p class="msg">The file is chosen when you connect. It is opened in memory; use File &gt; Save to download changes.</p>
+                <p class="msg">The file is chosen when you connect. It is opened in memory; use Save SQLite file in the connection menu to download changes.</p>
               ) : (
                 <>
                   <label class="field">
@@ -362,7 +362,7 @@ export function ConnDialog(props: {
         </>
       )}
       {msg && (
-        <p class={`msg${msg.ok ? '' : ' error'}`} role={msg.ok ? 'status' : 'alert'}>
+        <p class={`msg${msg.ok ? ' ok' : ' error'}`} role={msg.ok ? 'status' : 'alert'}>
           {msg.text}
         </p>
       )}
